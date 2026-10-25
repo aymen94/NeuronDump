@@ -68,15 +68,17 @@ Start `neurondump web --open`, pick a model, and open the **graph** tab.
 
 ### Views and navigation
 
-The **view** menu draws the same graph four ways. All of them use wamr3d (WebGPU, or WebGL 2 as
-a fallback), which is bundled with NeuronDump so the page works offline. A browser with neither
-shows an error instead of the graph.
+The **2D / 3D** toggle picks the renderer; in 3D a **layout** menu picks the arrangement. All of
+them use wamr3d (WebGPU, or WebGL 2 automatically when WebGPU is missing), bundled with NeuronDump so
+the page works offline. The badge next to the toggle shows the active backend. Details:
+[3D graph](3d-graph.md).
 
 | View | What you see | Mouse |
 |---|---|---|
-| **3D tower** (default) | sections stacked bottom to top (Input, Body, Output, Tokenizer, Chat template); the layers are floors of the Body; slab size follows the bytes | drag to orbit, right-drag to pan, wheel to zoom |
-| **3D city** | sections left to right; every part is a bar whose height follows its size | same as tower |
-| **3D force** | a force layout that follows the dataflow | same as tower |
+| **3D · dataflow** (default) | the dataflow as a column: Input at the bottom, layer 0 … N upwards, Output on top; side sections beside it; expanded blocks around their layer, heads / buckets / experts on rings; **▶ token flow** animates a token through it | drag to orbit, right-drag to pan, wheel to zoom |
+| **3D · tower** | sections stacked bottom to top; the layers are floors of the Body; slab size follows the bytes | same |
+| **3D · city** | sections left to right; every part is a bar whose height follows its size | same |
+| **3D · force** | a force layout that follows the dataflow | same |
 | **2D** | a flat diagram read top to bottom, seen straight on | drag to pan, wheel to zoom |
 
 Above the canvas:
@@ -89,7 +91,10 @@ Above the canvas:
   - section, layer kind, quantization or importance;
   - **damage** after a sweep.
 
-The view you pick is remembered. The page link can also force one: `#/model/<id>/graph?view=2d`.
+The view you pick is remembered. The page link can also force one: `#/model/<id>/graph?view=2d` (or `flow`, `tower`, `city`, `force`).
+
+**Marks** are the same in every view: blue = selected or a search match, red = cut, orange = changed by
+an [edit](interventions.md), purple = on the path of the token from the last [journey](web-ui.md#journey).
 
 ![Section level, grouped by layer](images/model_graph2.png)
 
@@ -192,12 +197,16 @@ Hybrid models (qwen3.5, qwen3.8: three SSM layers, then one attention layer) can
     **corpus** (prefilled with a few sentences).
   - The result compares baseline and cut model: the top next tokens, KL divergence, greedy text,
     tokens/s, the logit lens per layer, and perplexity on the corpus.
-  - For llama3.2:1b, cutting layer 7 drops " Rome" from 0.84 to 0.61, and the cut model writes
-    "Rome, but it's not the capital of Italy".
+  - For llama3.2:1b on "The name of the star that Earth orbits is", cutting layer 7 changes the top
+    token from " not" (0.17) to " a" (0.16, KL 0.55), and the text from "not a fixed or constant name"
+    to "a bit of a mystery, but I'll give you some".
 - **Sweep this level (layers)** and **Sweep heads of layer N** (in an attention block's panel):
   - They cut each part in turn on the corpus and rank them by damage.
   - The graph recolors by damage (red = essential), and a table lists every part.
   - **Save the N least damaging as a plan** turns the result into a prune plan.
+- **Apply as edit:** puts the cut on the [edit stack](interventions.md), where it can be toggled,
+  undone, compared and baked like any other edit. The side panel's **Edit:** buttons add zero / scale /
+  skip edits for one node.
 - **Save as plan → Slim:** shows the plan as the usual candidate table. Pick an output name and
   press **Slim** to write the GGUF and its Ollama Modelfile.
 
@@ -243,7 +252,7 @@ It prints the same report as the web panel. `--force` allows `breaks_model` cuts
 ### Simulated impact
 
 ```sh
-neurondump ablate llama3.2:1b --cut layer.7 --prompt "The capital of Italy is" --tokens 12
+neurondump ablate llama3.2:1b --cut layer.7 --prompt "The name of the star that Earth orbits is" --tokens 12
 neurondump ablate llama3.2:1b --cut layer.15 --corpus texts.txt
 ```
 
@@ -272,5 +281,5 @@ to get its heads and neuron buckets.
 neurondump[llama3.2:1b]> cut layer.7 layer.9.attn.head.3
 selection: layer.7, layer.9.attn.head.3
 61.1M params, 1.23 GiB -> 1.17 GiB, verdict risky
-neurondump[llama3.2:1b]> simulate The capital of Italy is --tokens 8
+neurondump[llama3.2:1b]> simulate The name of the star that Earth orbits is --tokens 8
 ```

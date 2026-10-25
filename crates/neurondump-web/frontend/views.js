@@ -345,7 +345,7 @@ export function planView(id, plan) {
 
 export async function trace(id) {
   const info = await api('/info');
-  const prompt = el('input', { size: 60, value: 'The capital of Italy is' });
+  const prompt = el('input', { size: 60, value: 'The name of the star that Earth orbits is' });
   const corpus = el('textarea', { rows: 4, cols: 80, placeholder: 'Corpus mode: texts separated by blank lines (aggregated)' });
   const out = el('div', {});
   const run = async () => {
@@ -364,7 +364,7 @@ export async function trace(id) {
           { label: 'logit lens', get: (l) => l.logit_lens.map((t) => `"${esc(t.text)}" ${t.prob.toFixed(2)}`).join('  ') },
         ], r.layers),
         r.embedding_contributions?.length ? table([{ label: 'token', get: (t) => esc(t.text) }, { label: 'contribution', get: (t) => t.contribution.toFixed(3), num: true }], r.embedding_contributions) : '',
-        r.warnings.map((w) => el('p', { class: 'muted' }, w)));
+        ...r.warnings.map((w) => el('p', { class: 'muted' }, w)));
     } catch (e) { out.append(errorBox(e)); }
   };
   return el('section', {}, el('h2', {}, 'Trace / logit lens'),

@@ -24,6 +24,7 @@ use neurondump_core::slim::SlimReport;
 use neurondump_core::stats::StatsReport;
 use neurondump_core::template::template_report;
 use neurondump_core::tokenizer::{Encoder, VocabQuery};
+use neurondump_core::tokens::TokenizeRequest;
 use neurondump_core::trace::TraceReport;
 use neurondump_core::{App, DiscoveryOptions, JobKind, NoProgress};
 
@@ -314,6 +315,90 @@ pub enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Tokenization: ids, text, class, template tokens, embedding norms and neighbours.
+    Tokens {
+        model: String,
+        text: String,
+        /// Wrap the text in the chat template (shows the full templated prompt).
+        #[arg(long)]
+        chat: bool,
+        #[arg(long)]
+        system: Option<String>,
+        /// Nearest neighbours per token by embedding cosine (0 = skip).
+        #[arg(long, default_value_t = 5)]
+        neighbors: usize,
+    },
+    /// Follow one token through the layers: logit lens, attention, FFN, decision breakdown (feature `trace`).
+    Journey {
+        model: String,
+        #[command(flatten)]
+        prompt: PromptArgs,
+        /// Token index (negative counts from the end; -1 = last).
+        #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
+        token: i64,
+        /// Apply these edits (edits.json); default: none.
+        #[arg(long)]
+        edits: Option<PathBuf>,
+        #[arg(long, default_value_t = 5)]
+        top_k: usize,
+    },
+    /// Generate tokens with a per-step timeline (feature `trace`).
+    Generate {
+        model: String,
+        #[command(flatten)]
+        prompt: PromptArgs,
+        #[arg(long, default_value_t = 16)]
+        steps: usize,
+        /// Decision breakdown for every step.
+        #[arg(long)]
+        explain: bool,
+        #[arg(long)]
+        temperature: Option<f32>,
+        #[arg(long)]
+        top_k: Option<usize>,
+        #[arg(long)]
+        top_p: Option<f32>,
+        #[arg(long)]
+        seed: Option<u64>,
+        #[arg(long)]
+        edits: Option<PathBuf>,
+    },
+    /// Apply an edits.json in memory: baseline vs edited comparison, optionally bake a new GGUF.
+    Edit {
+        model: String,
+        /// The edits file (REPL `edits export`, the web UI, or hand-written).
+        #[arg(long)]
+        apply: PathBuf,
+        /// Prompt(s) to compare (repeatable).
+        #[arg(long)]
+        prompt: Vec<String>,
+        #[arg(long)]
+        chat: bool,
+        /// Corpus (texts separated by blank lines) for perplexity and mean KL.
+        #[arg(long)]
+        corpus: Option<PathBuf>,
+        /// Tokens generated per prompt on both sides.
+        #[arg(long, default_value_t = 16)]
+        tokens: usize,
+        /// Write the edits into a new GGUF (never the original).
+        #[arg(long)]
+        bake: Option<PathBuf>,
+        /// Only bake, no comparison.
+        #[arg(long)]
+        no_compare: bool,
+    },
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PromptArgs {
+    #[arg(long)]
+    pub prompt: String,
+    /// Wrap the prompt in the model's chat template.
+    #[arg(long)]
+    pub chat: bool,
+    /// System prompt (implies --chat; empty = none).
+    #[arg(long)]
+    pub system: Option<String>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -695,7 +780,88 @@ pub fn run_command(ctx: &Ctx, cmd: &Cmd) -> Result<String> {
             }
             Ok(s)
         }
+        Cmd::Tokens { model, text, chat, system, neighbors } => {
+            let m = app.open(model)?;
+            let v = app.vocab(&m)?;
+            let req = TokenizeRequest { text: text.clone(), chat: *chat || system.is_some(), system: system.clone(), template: None, neighbors: *neighbors };
+            let banned = app.edit_view(&m).ok().and_then(|v| v.compiled).map(|c| c.intervention.mask_tokens).unwrap_or_default();
+            let bar = ctx.bar("tokens");
+            let r = neurondump_core::tokens::tokenize(&m, &v, &req, &banned, &bar);
+            bar.finish();
+            let r = r?;
+            if json {
+                to_json(&r)
+            } else {
+                Ok(render::tokens(&r))
+            }
+        }
+        Cmd::Journey { model, prompt, token, edits, top_k } => {
+            let e = load_edits(edits.as_ref())?;
+            let params = json!({
+                "prompt": prompt.prompt, "chat": prompt.chat || prompt.system.is_some(), "system": prompt.system,
+                "token": token, "top_k": top_k, "edits": e.unwrap_or_default(),
+            });
+            let v = ctx.run_job(JobKind::Journey, model, params)?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::journey(&serde_json::from_value(v)?))
+        }
+        Cmd::Generate { model, prompt, steps, explain, temperature, top_k, top_p, seed, edits } => {
+            let e = load_edits(edits.as_ref())?;
+            let params = json!({
+                "prompt": prompt.prompt, "chat": prompt.chat || prompt.system.is_some(), "system": prompt.system,
+                "steps": steps, "explain": explain, "temperature": temperature, "sample_top_k": top_k, "top_p": top_p, "seed": seed,
+                "edits": e.unwrap_or_default(),
+            });
+            let v = ctx.run_job(JobKind::Generate, model, params)?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::generate(&serde_json::from_value(v)?, *explain))
+        }
+        Cmd::Edit { model, apply, prompt, chat, corpus, tokens, bake, no_compare } => {
+            let e = load_edits(Some(apply))?.unwrap_or_default();
+            let mut out = String::new();
+            let mut jv = json!({});
+            {
+                // Validate the edits (and show what they compile to) before running anything.
+                let m = app.open(model)?;
+                let g = app.graph(&m)?;
+                let v = app.vocab(&m).ok();
+                let c = neurondump_core::edits::compile(&g, v.as_deref(), &e)?;
+                out.push_str(&render::edits_list(&e, Some(&c)));
+            }
+            if !*no_compare {
+                let params = json!({ "prompts": prompt, "chat": chat, "corpus_file": corpus, "tokens": tokens, "edits": e });
+                let v = ctx.run_job(JobKind::Compare, model, params)?;
+                let r: neurondump_core::app::CompareResult = serde_json::from_value(v.clone())?;
+                out.push('\n');
+                out.push_str(&render::simulation(&r.simulation));
+                out.push_str(&render::compare_decisions(&r.simulation));
+                jv["compare"] = v;
+            }
+            if let Some(path) = bake {
+                let abs = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+                let v = ctx.run_job(JobKind::Bake, model, json!({ "edits": e, "out": abs }))?;
+                let r: neurondump_core::edits::BakeReport = serde_json::from_value(v.clone())?;
+                out.push('\n');
+                out.push_str(&render::bake(&r));
+                jv["bake"] = v;
+            }
+            if json {
+                return to_json(&jv);
+            }
+            Ok(out)
+        }
     }
+}
+
+/// Reads an edits.json (portable patch) given on the command line.
+fn load_edits(p: Option<&PathBuf>) -> Result<Option<Vec<neurondump_core::edits::Edit>>> {
+    let Some(p) = p else { return Ok(None) };
+    let text = std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+    Ok(Some(neurondump_core::edits::EditsFile::parse(&text)?.edits))
 }
 
 /// Inspect with statistics coming from the shared cache (computed with a progress bar).

@@ -15,6 +15,7 @@ use rustyline::validate::Validator;
 use rustyline::{Context, Editor, Helper};
 use serde_json::{json, Value};
 
+use neurondump_core::edits::EditOp;
 use neurondump_core::graph::ModelGraph;
 use neurondump_core::tokenizer::TokenClass;
 use neurondump_core::JobKind;
@@ -46,6 +47,18 @@ const COMMANDS: &[(&str, &str)] = &[
     ("simulate", "simulate [prompt] [--tokens N] [--corpus f] [--force]   run the selection in memory (& for background)"),
     ("sweep", "sweep --corpus f [--level layer|head] [--layer N]   rank by damage (& for background)"),
     ("plan", "plan save <file> [--force]   write the selection as a prune plan for `slim`"),
+    ("tokens", "tokens <text> [--chat]  tokenization, template tokens, embedding neighbours"),
+    ("journey", "journey <idx> [prompt] [--chat] [--baseline]   follow a token through the layers (trace)"),
+    ("generate", "generate [prompt] [--steps N] [--explain] [--temperature t] [--top-k k] [--top-p p] [--seed s]"),
+    ("compare", "compare [prompt] [--tokens N] [--corpus f]   baseline vs the current edits"),
+    ("edit", "edit scale <node> <f> | zero <node> | skip <layer> | ablate <ids> | steer <layer> \"<a>\" \"<b>\" <strength>"),
+    ("edit ", "edit ban <token> | boost <token> <bias> | embed <token> scale <f>|replace <token> | patch <layer> [--head h] [--all] \"<src>\""),
+    ("edit  ", "edit sampling <temp> [top_k] [top_p] [seed] | force <step> <token> | system <text> | template <file>"),
+    ("edits", "edits [export <file> | import <file>]   the edit stack"),
+    ("toggle", "toggle <id>            switch one edit on/off"),
+    ("undo", "undo | redo | restore  edit history (restore = back to the original model)"),
+    ("snapshot", "snapshot save|load <name>   named edit sets"),
+    ("bake", "bake <file.gguf>       write the enabled edits into a new GGUF + Modelfile"),
     ("jobs", "jobs                   background jobs"),
     ("job", "job <id>               show a finished job's result"),
     ("cancel", "cancel <id>            cancel a job"),
@@ -92,7 +105,11 @@ impl Completer for ReplHelper {
             items.into_iter().filter(|c| c.starts_with(word)).map(|c| Pair { display: c.clone(), replacement: c }).collect()
         };
         let cands = match (words.first().copied(), words.last().copied()) {
-            (None, _) => pairs(COMMANDS.iter().map(|c| c.0.to_string()).collect()),
+            (None, _) => {
+                let mut names: Vec<String> = COMMANDS.iter().map(|c| c.0.trim().to_string()).collect();
+                names.dedup();
+                pairs(names)
+            }
             (_, Some("--class")) => pairs(TokenClass::ALL.iter().map(|c| c.as_str().to_string()).collect()),
             (_, Some("--tensor")) | (_, Some("--role")) => pairs(self.tensors.lock().unwrap().clone()),
             (_, Some("--sort")) => pairs(["size", "type", "layer", "name", "offset"].map(String::from).to_vec()),
@@ -103,6 +120,12 @@ impl Completer for ReplHelper {
             (_, Some("--group-by")) => pairs(["section", "layer", "block", "quant", "kind", "importance"].map(String::from).to_vec()),
             (_, Some("--expand")) | (Some("node" | "cut" | "uncut"), _) => pairs(self.node_ids(word)),
             (Some("plan"), _) if words.len() == 1 => pairs(vec!["save".into()]),
+            (Some("edit"), _) if words.len() == 1 => pairs(
+                ["scale", "zero", "skip", "ablate", "steer", "ban", "boost", "embed", "patch", "sampling", "force", "system", "template"].map(String::from).to_vec(),
+            ),
+            (Some("edit"), Some("scale" | "zero" | "ablate")) => pairs(self.node_ids(word)),
+            (Some("snapshot"), _) if words.len() == 1 => pairs(vec!["save".into(), "load".into()]),
+            (Some("edits"), _) if words.len() == 1 => pairs(vec!["export".into(), "import".into()]),
             (Some("use" | "compare"), _) => pairs(self.models.lock().unwrap().clone()),
             _ => vec![],
         };
@@ -264,6 +287,13 @@ fn show_job(ctx: &Ctx, id: &str) -> Result<String> {
             s
         }
         JobKind::Sweep => render::sweep(&serde_json::from_value(v)?),
+        JobKind::Journey => render::journey(&serde_json::from_value(v)?),
+        JobKind::Generate => render::generate(&serde_json::from_value(v)?, false),
+        JobKind::Compare => {
+            let r: neurondump_core::app::CompareResult = serde_json::from_value(v)?;
+            render::simulation(&r.simulation) + &render::compare_decisions(&r.simulation)
+        }
+        JobKind::Bake => render::bake(&serde_json::from_value(v)?),
         JobKind::Inspect => {
             let stats: Value = v["stats"].clone();
             if stats.is_null() {
@@ -306,6 +336,8 @@ pub fn run(ctx: &Ctx) -> Result<()> {
     let web_running: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     // Cut selection for impact / simulate / plan (cleared by `use`).
     let mut selection: Vec<String> = Vec::new();
+    // Last prompt given to tokens / journey / generate / compare.
+    let mut last_prompt = String::new();
 
     loop {
         let prompt = format!("neurondump[{}]> ", current.as_deref().unwrap_or("-"));
@@ -432,6 +464,187 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                             i.verdict.as_str(),
                             if i.refused { " (refused without --force)" } else { "" }
                         )
+                    }
+                }
+                "tokens" | "journey" | "generate" | "compare" | "edit" | "edits" | "toggle" | "undo" | "redo" | "restore" | "snapshot" | "bake" if !bg => {
+                    let model = need_model()?;
+                    let m = ctx.app.open(&model)?;
+                    let flag = |f: &str| args.iter().any(|a| a == f);
+                    let value = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).cloned();
+                    // Words that are not flags (or flag values) form the prompt.
+                    let words = |skip_first: usize| -> Vec<String> {
+                        let mut out = Vec::new();
+                        let mut i = 0;
+                        while i < args.len() {
+                            let a = &args[i];
+                            if a.starts_with("--") {
+                                if !matches!(a.as_str(), "--chat" | "--explain" | "--baseline" | "--all") {
+                                    i += 1;
+                                }
+                            } else if i >= skip_first {
+                                out.push(a.clone());
+                            }
+                            i += 1;
+                        }
+                        out
+                    };
+                    let prompt_of = |w: Vec<String>, last: &str| -> Result<String> {
+                        let p = if w.is_empty() { last.to_string() } else { w.join(" ") };
+                        if p.is_empty() {
+                            bail!("give a prompt (it is remembered for the next tokens / journey / generate / compare)");
+                        }
+                        Ok(p)
+                    };
+                    let chat = flag("--chat");
+                    let view = |ctx: &Ctx| -> Result<String> { Ok(render::edit_view(&ctx.app.edit_view(&m)?)) };
+                    match cmd.as_str() {
+                        "tokens" => {
+                            let p = prompt_of(words(0), &last_prompt)?;
+                            last_prompt = p.clone();
+                            let mut argv = vec!["neurondump".to_string()];
+                            if ctx.global.json {
+                                argv.push("--json".into());
+                            }
+                            argv.extend(["tokens".into(), model.clone(), p]);
+                            if chat {
+                                argv.push("--chat".into());
+                            }
+                            let cli = Cli::try_parse_from(&argv).map_err(|e| anyhow::anyhow!("{e}"))?;
+                            run_command(ctx, &cli.command.ok_or_else(|| anyhow::anyhow!("no command"))?)?
+                        }
+                        "journey" => {
+                            let idx: i64 = args.first().and_then(|a| a.parse().ok()).ok_or_else(|| anyhow::anyhow!("journey <token index> [prompt] (negative counts from the end)"))?;
+                            let p = prompt_of(words(1), &last_prompt)?;
+                            last_prompt = p.clone();
+                            let params = json!({ "prompt": p, "chat": chat, "token": idx, "baseline": flag("--baseline") });
+                            let v = ctx.run_job(JobKind::Journey, &model, params)?;
+                            if ctx.global.json { serde_json::to_string_pretty(&v)? } else { render::journey(&serde_json::from_value(v)?) }
+                        }
+                        "generate" => {
+                            let p = prompt_of(words(0), &last_prompt)?;
+                            last_prompt = p.clone();
+                            let num = |f: &str| value(f).and_then(|x| x.parse::<f64>().ok());
+                            let params = json!({
+                                "prompt": p, "chat": chat, "steps": num("--steps").map(|x| x as usize).unwrap_or(16), "explain": flag("--explain"),
+                                "temperature": num("--temperature"), "sample_top_k": num("--top-k").map(|x| x as usize), "top_p": num("--top-p"),
+                                "seed": num("--seed").map(|x| x as u64), "baseline": flag("--baseline"),
+                            });
+                            let v = ctx.run_job(JobKind::Generate, &model, params)?;
+                            if ctx.global.json { serde_json::to_string_pretty(&v)? } else { render::generate(&serde_json::from_value(v)?, flag("--explain")) }
+                        }
+                        "compare" => {
+                            let p = prompt_of(words(0), &last_prompt)?;
+                            last_prompt = p.clone();
+                            let tokens = value("--tokens").and_then(|x| x.parse::<usize>().ok()).unwrap_or(12);
+                            let params = json!({ "prompt": p, "chat": chat, "tokens": tokens, "corpus_file": value("--corpus") });
+                            let v = ctx.run_job(JobKind::Compare, &model, params)?;
+                            let r: neurondump_core::app::CompareResult = serde_json::from_value(v)?;
+                            render::edits_list(&r.edits, Some(&r.compiled)) + "\n" + &render::simulation(&r.simulation) + &render::compare_decisions(&r.simulation)
+                        }
+                        "edit" => {
+                            let vocab = ctx.app.vocab(&m)?;
+                            let tok = |s: Option<&String>| -> Result<u32> {
+                                neurondump_core::edits::resolve_token(&vocab, s.ok_or_else(|| anyhow::anyhow!("missing token"))?)
+                            };
+                            let num = |s: Option<&String>, what: &str| -> Result<f32> {
+                                s.and_then(|x| x.parse::<f32>().ok()).ok_or_else(|| anyhow::anyhow!("missing or bad {what}"))
+                            };
+                            let layer = |s: Option<&String>| -> Result<u32> { s.and_then(|x| x.trim_start_matches("layer.").parse().ok()).ok_or_else(|| anyhow::anyhow!("missing layer number")) };
+                            let a = |i: usize| args.get(i);
+                            let op = match a(0).map(String::as_str) {
+                                Some("scale") => EditOp::Scale { target: a(1).cloned().ok_or_else(|| anyhow::anyhow!("edit scale <node> <factor>"))?, factor: num(a(2), "factor")? },
+                                Some("zero") => EditOp::Zero { target: a(1).cloned().ok_or_else(|| anyhow::anyhow!("edit zero <node>"))? },
+                                Some("skip") => EditOp::Skip { layer: layer(a(1))? },
+                                Some("ablate") => EditOp::Ablate { cut: args[1..].to_vec() },
+                                Some("steer") => EditOp::Steer {
+                                    layer: layer(a(1))?,
+                                    a: a(2).cloned().ok_or_else(|| anyhow::anyhow!("edit steer <layer> \"<a>\" \"<b>\" <strength>"))?,
+                                    b: a(3).cloned().ok_or_else(|| anyhow::anyhow!("edit steer <layer> \"<a>\" \"<b>\" <strength>"))?,
+                                    strength: num(a(4), "strength").unwrap_or(4.0),
+                                },
+                                Some("ban") => EditOp::Ban { token: tok(a(1))? },
+                                Some("boost") => EditOp::Boost { token: tok(a(1))?, bias: num(a(2), "bias").unwrap_or(5.0) },
+                                Some("embed") => match a(2).map(String::as_str) {
+                                    Some("replace") => EditOp::Embed { token: tok(a(1))?, scale: None, replace_with: Some(tok(a(3))?) },
+                                    Some("scale") => EditOp::Embed { token: tok(a(1))?, scale: Some(num(a(3), "factor")?), replace_with: None },
+                                    _ => bail!("edit embed <token> scale <factor> | edit embed <token> replace <other token>"),
+                                },
+                                Some("patch") => {
+                                    let rest = words(2);
+                                    EditOp::Patch {
+                                        layer: layer(a(1))?,
+                                        head: value("--head").and_then(|h| h.parse().ok()),
+                                        source: (!rest.is_empty()).then(|| rest.join(" ")).ok_or_else(|| anyhow::anyhow!("edit patch <layer> [--head h] [--all] \"<source prompt>\""))?,
+                                        all_positions: flag("--all"),
+                                    }
+                                }
+                                Some("sampling" | "temp" | "temperature") => EditOp::Sampling {
+                                    temperature: num(a(1), "temperature")?,
+                                    top_k: a(2).and_then(|x| x.parse().ok()),
+                                    top_p: a(3).and_then(|x| x.parse().ok()),
+                                    seed: a(4).and_then(|x| x.parse().ok()),
+                                },
+                                Some("force") => EditOp::Force { step: a(1).and_then(|x| x.parse().ok()).ok_or_else(|| anyhow::anyhow!("edit force <step> <token>"))?, token: tok(a(2))? },
+                                Some("system") => EditOp::System { text: args[1..].join(" ") },
+                                Some("template") => {
+                                    let f = a(1).ok_or_else(|| anyhow::anyhow!("edit template <file with a Go template>"))?;
+                                    EditOp::Template { text: std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("reading {f}: {e}"))? }
+                                }
+                                _ => bail!("edit scale|zero|skip|ablate|steer|ban|boost|embed|patch|sampling|force|system|template … (see `help`)"),
+                            };
+                            let id = ctx.app.push_edit(&m, op, None)?;
+                            format!("added edit #{id}\n{}", view(ctx)?)
+                        }
+                        "edits" => match args.first().map(String::as_str) {
+                            Some("export") => {
+                                let f = args.get(1).ok_or_else(|| anyhow::anyhow!("edits export <file>"))?;
+                                let file = neurondump_core::edits::EditsFile::new(&m, None, ctx.app.edit_stack(&m).edits);
+                                std::fs::write(f, serde_json::to_vec_pretty(&file)?).map_err(|e| anyhow::anyhow!("writing {f}: {e}"))?;
+                                format!("wrote {f} (apply with `neurondump edit {model} --apply {f}`)\n")
+                            }
+                            Some("import") => {
+                                let f = args.get(1).ok_or_else(|| anyhow::anyhow!("edits import <file>"))?;
+                                let text = std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("reading {f}: {e}"))?;
+                                let w = ctx.app.import_edits(&m, neurondump_core::edits::EditsFile::parse(&text)?)?;
+                                w.iter().map(|x| format!("warning: {x}\n")).collect::<String>() + &view(ctx)?
+                            }
+                            _ => view(ctx)?,
+                        },
+                        "toggle" => {
+                            let id: u64 = args.first().and_then(|x| x.trim_start_matches('#').parse().ok()).ok_or_else(|| anyhow::anyhow!("toggle <edit id>"))?;
+                            let on = ctx.app.edit(&m, |s| s.toggle(id))?;
+                            format!("edit #{id} {}\n{}", if on { "on" } else { "off" }, view(ctx)?)
+                        }
+                        "undo" | "redo" | "restore" => {
+                            let changed = ctx.app.edit(&m, |s| {
+                                Ok(match cmd.as_str() {
+                                    "undo" => s.undo(),
+                                    "redo" => s.redo(),
+                                    _ => {
+                                        s.restore();
+                                        true
+                                    }
+                                })
+                            })?;
+                            format!("{}{}", if changed { "" } else { "nothing to do\n" }, view(ctx)?)
+                        }
+                        "snapshot" => match (args.first().map(String::as_str), args.get(1)) {
+                            (Some("save"), Some(n)) => format!("saved {}\n", ctx.app.save_snapshot(&m, n)?.display()),
+                            (Some("load"), Some(n)) => {
+                                let w = ctx.app.load_snapshot(&m, n)?;
+                                w.iter().map(|x| format!("warning: {x}\n")).collect::<String>() + &view(ctx)?
+                            }
+                            _ => format!(
+                                "snapshot save|load <name>; saved: {}\n",
+                                neurondump_core::edits::list_snapshots(&ctx.app.config.output_dir, &m).join(", ")
+                            ),
+                        },
+                        _ => {
+                            let f = args.first().ok_or_else(|| anyhow::anyhow!("bake <file.gguf>"))?;
+                            let abs = std::path::absolute(f).unwrap_or_else(|_| std::path::PathBuf::from(f));
+                            let v = ctx.run_job(JobKind::Bake, &model, json!({ "out": abs }))?;
+                            render::bake(&serde_json::from_value(v)?)
+                        }
                     }
                 }
                 _ if bg => background(ctx, &need_model()?, &cmd, &args, &selection)?,

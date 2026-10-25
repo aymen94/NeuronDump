@@ -531,7 +531,7 @@ fn keep_only_was_corpus(applied: &[String]) -> bool {
 
 /// Zeroes part of a tensor in place. Returns the new type when the tensor had to be
 /// requantized (column ranges not aligned to the quantization blocks).
-fn apply_zero(o: &ZeroOp, dims: &[u64], ty: GgmlType, data: &mut Vec<u8>) -> Result<Option<GgmlType>> {
+pub(crate) fn apply_zero(o: &ZeroOp, dims: &[u64], ty: GgmlType, data: &mut Vec<u8>) -> Result<Option<GgmlType>> {
     if o.all {
         data.fill(0);
         return Ok(None);

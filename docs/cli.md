@@ -115,7 +115,7 @@ Impact of removing or zeroing these nodes, then a simulated run if the build has
 | Option | |
 |---|---|
 | `--static` | only the instant estimate, no inference |
-| `--prompt "<text>"` | prompt to compare (default "The capital of Italy is") |
+| `--prompt "<text>"` | prompt to compare (default "The name of the star that Earth orbits is") |
 | `--corpus <file>` | texts separated by blank lines: perplexity and mean KL |
 | `--tokens N` | greedy tokens to generate (default 16) |
 | `--force` | allow `breaks_model` cuts |
@@ -125,6 +125,74 @@ Impact of removing or zeroing these nodes, then a simulated run if the build has
 Cuts each layer (`--level layer`) or each head of one layer (`--level head --layer N`) in turn
 and ranks them by damage. `--out` writes the JSON, and `--save-plan <file> --top N` writes the N
 least damaging as a prune plan.
+
+### `tokens <model> "<text>"`
+Tokenization with no inference (any model): token ids, readable text, class, which tokens the chat
+template added, the norm of each token's `token_embd` row and output row, whether the model can
+predict it, and its nearest tokens by embedding cosine.
+
+| Option | |
+|---|---|
+| `--chat` | wrap the text in the chat template first and print the full templated prompt |
+| `--system "<text>"` | system prompt for the template (implies `--chat`; `""` = none) |
+| `--neighbors N` | nearest neighbours per token (default 5, `0` skips the embedding scan) |
+
+```sh
+neurondump tokens llama3.2:1b "fn main() {"
+neurondump tokens qwen2.5-coder:7b "fn main() {" --chat --system "You are a Rust expert."
+```
+
+### `journey <model> --prompt "<text>"`
+Follows one token through every layer (needs `--features trace`): residual norm, logit lens, the
+probability and rank of the final prediction per layer, which earlier tokens it attends to, the most
+active FFN neuron buckets, and the **decision breakdown** (final candidates and how much every layer,
+head and neuron pushed the chosen token against the runner-up).
+
+| Option | |
+|---|---|
+| `--token N` | token index; negative counts from the end (default `-1`, the last token) |
+| `--chat`, `--system` | as for `tokens` |
+| `--edits <edits.json>` | run with these edits |
+| `--top-k N` | lens tokens per layer (default 5) |
+
+```sh
+neurondump journey qwen2.5-coder:7b --prompt "fn main() {"
+neurondump journey llama3.2:1b --prompt "The name of the star that Earth orbits is" --token -1 --edits steer.json
+```
+
+### `generate <model> --prompt "<text>"`
+Generates tokens with a per-step timeline: chosen token, probability, entropy, top alternative (and
+the layer that pushed most, with `--explain`). Needs `--features trace`.
+
+| Option | |
+|---|---|
+| `--steps N` | tokens to generate (default 16) |
+| `--explain` | a decision breakdown for every step |
+| `--temperature T`, `--top-k K`, `--top-p P`, `--seed S` | sampling (default greedy) |
+| `--chat`, `--system` | chat formatting |
+| `--edits <edits.json>` | run with these edits |
+
+```sh
+neurondump generate llama3.2:1b --prompt "The name of the star that Earth orbits is" --steps 8 --explain
+```
+
+### `edit <model> --apply <edits.json>`
+Applies a portable edit patch in memory and compares baseline vs edited; optionally bakes a new
+GGUF. See [Interventions](interventions.md) for the edit format.
+
+| Option | |
+|---|---|
+| `--prompt "<text>"` | prompt to compare (repeatable; default "The name of the star that Earth orbits is") |
+| `--chat` | wrap prompts in the chat template |
+| `--corpus <file>` | texts separated by blank lines: perplexity and mean KL |
+| `--tokens N` | tokens generated per side (default 16) |
+| `--bake <out.gguf>` | also write the edits into a new GGUF (plus a Modelfile); never the original |
+| `--no-compare` | only bake |
+
+```sh
+neurondump edit llama3.2:1b --apply edits.json --prompt "The name of the star that Earth orbits is" --tokens 12
+neurondump edit llama3.2:1b --apply edits.json --bake llama-edited.gguf --no-compare
+```
 
 ### `compare <model> <model> [...]`
 Side by side: sizes, layers, tokenizer, vocabulary overlap, differing metadata.
@@ -141,7 +209,7 @@ Side by side: sizes, layers, tokenizer, vocabulary overlap, differing metadata.
 Keys: `default_ui`, `port`, `scan_dirs`, `output_dir`, `threads`.
 
 ### `web`
-`--port N`, `--open`, `--host`. See [Web interface](web.md).
+`--port N`, `--open`, `--host`. See [Web interface](web-ui.md) and [API](api.md).
 
 ## Interactive mode (REPL)
 
@@ -172,10 +240,41 @@ neurondump[llama3.2:1b]> use nomic-embed-text
 | `simulate [prompt] [--tokens N] [--corpus f]` | run the selection in memory (`&` for background) |
 | `sweep --corpus f [--level head --layer N]` | rank layers or heads by damage (`&` for background) |
 | `plan save <file>` | write the selection as a prune plan |
+| `tokens <text> [--chat]` | tokenization of the current model (the text is remembered) |
+| `journey <idx> [prompt] [--chat] [--baseline]` | follow token `idx` (negative from the end) through the layers, with the current edits |
+| `generate [prompt] [--steps N] [--explain] [--temperature t] [--top-k k] [--top-p p] [--seed s]` | generation timeline |
+| `compare [prompt] [--tokens N] [--corpus f]` | baseline vs the current edits |
+| `edit scale <node> <factor>` | scale a layer, block, KV group, head, neuron bucket (`layer.7.ffn.n.0-63`), neuron (`layer.7.ffn.neuron.42`) or expert |
+| `edit zero <node>`, `edit skip <layer>`, `edit ablate <ids>` | zero / skip / cut (any `ablate` id) |
+| `edit steer <layer> "<a>" "<b>" <strength>` | steering vector from two prompts |
+| `edit ban <token>`, `edit boost <token> <bias>` | logit edits (token as text or `#id`) |
+| `edit embed <token> scale <f>` / `edit embed <token> replace <token>` | embedding row edits |
+| `edit patch <layer> [--head h] [--all] "<source prompt>"` | activation patching |
+| `edit sampling <temp> [top_k] [top_p] [seed]`, `edit force <step> <token>` | sampling edits |
+| `edit system <text>`, `edit template <file>` | prompt edits |
+| `edits [export <file> \| import <file>]` | the edit stack |
+| `toggle <id>`, `undo`, `redo`, `restore` | switch an edit, history, back to the original model |
+| `snapshot save\|load <name>` | named edit sets (saved to disk) |
+| `bake <file.gguf>` | write the enabled edits into a new GGUF + Modelfile |
 | `jobs`, `job <id>`, `cancel <id>` | background jobs |
 | `web` | open the web interface on the same session |
 | `rescan` | look for models again |
 | `help`, `exit` | |
+
+The edit stack is per model and shared with the web UI started by `web` in the same session.
+
+```
+neurondump[llama3.2:1b]> tokens The name of the star that Earth orbits is
+neurondump[llama3.2:1b]> journey -1
+neurondump[llama3.2:1b]> edit zero layer.7
+neurondump[llama3.2:1b]> compare --tokens 8
+neurondump[llama3.2:1b]> undo
+neurondump[llama3.2:1b]> edit steer 6 "Dear Sir or Madam, I am writing to formally request" "hey dude, just wanna ask" 4
+neurondump[llama3.2:1b]> generate Write a note to my boss: --steps 20
+neurondump[llama3.2:1b]> snapshot save formal
+neurondump[llama3.2:1b]> restore
+neurondump[llama3.2:1b]> bake llama-formal.gguf
+```
 
 Tab completes commands, model names, tensor names, token classes and graph node ids. History is kept
 between sessions. Long output is shown one page at a time.

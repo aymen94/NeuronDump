@@ -15,6 +15,7 @@
     <a href="#/jobs">Jobs<span id="jobs-badge" class="badge" hidden></span></a>
   </nav>
   <span id="model-label"></span>
+  <button id="edits-toggle" hidden title="Live edits of this model (on every page)">Edits</button>
   <input id="search" type="search" placeholder="Search models, tokens, tensors, metadata  ( / )" autocomplete="off">
   <div id="theme" class="segmented" role="radiogroup" aria-label="Theme">
     <button data-theme-choice="system" role="radio" title="System theme">System</button>
@@ -24,6 +25,7 @@
 </header>
 <nav id="modelnav" hidden></nav>
 <main id="view"><p>Loading…</p></main>
+<aside id="edit-drawer" hidden></aside>
 <div id="toast" hidden></div>
 <script type="module" src="/assets/app.js"></script>
 </body>

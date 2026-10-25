@@ -58,6 +58,9 @@ well under a second, even for a 16 GB model.
 
 ## Code layout
 
+More detail (core API, job system, graph, forward pass, edit overlay): [Architecture](architecture.md).
+
+
 | Crate | Job |
 |---|---|
 | `neurondump-gguf` | read, decode and write GGUF files |

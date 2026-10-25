@@ -19,6 +19,10 @@ pub enum JobKind {
     Trace,
     Ablate,
     Sweep,
+    Journey,
+    Generate,
+    Compare,
+    Bake,
 }
 
 impl JobKind {
@@ -31,6 +35,10 @@ impl JobKind {
             JobKind::Trace => "trace",
             JobKind::Ablate => "ablate",
             JobKind::Sweep => "sweep",
+            JobKind::Journey => "journey",
+            JobKind::Generate => "generate",
+            JobKind::Compare => "compare",
+            JobKind::Bake => "bake",
         }
     }
 
@@ -43,6 +51,10 @@ impl JobKind {
             "trace" => JobKind::Trace,
             "ablate" => JobKind::Ablate,
             "sweep" => JobKind::Sweep,
+            "journey" => JobKind::Journey,
+            "generate" => JobKind::Generate,
+            "compare" => JobKind::Compare,
+            "bake" => JobKind::Bake,
             _ => return None,
         })
     }

@@ -2,25 +2,15 @@
 // diagram, or in 3D a tower, a city skyline or a force-directed cloud.
 
 import { count, bytes } from './ui.js';
+import { loadWamr, createRenderer, cssVar } from './wamr.js';
 
 export const MODES = { '2d': '2D', tower: '3D tower', city: '3D city', force: '3D force' };
 
-let W = null;
 let OrbitControls = null;
 async function loadLib() {
-  if (!W) {
-    const lib = await import('./vendor/wamr3d/compat.js');
-    await lib.init();
-    // The controls build engine values at import time, so they load after init().
-    ({ OrbitControls } = await import('./vendor/wamr3d/addons/controls/OrbitControls.js'));
-    W = lib;
-  }
-  return W;
-}
-
-function cssVar(name, fallback) {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
+  const w = await loadWamr();
+  OrbitControls = w.OrbitControls;
+  return w.T;
 }
 
 // --- layout -----------------------------------------------------------------------------
@@ -321,8 +311,7 @@ function containerBounds(view, s, pos, head = 0) {
  */
 export async function createGraph3D(container, opts = {}) {
   const T = await loadLib();
-  const renderer = new T.WebGPURenderer({ antialias: true });
-  await renderer.init();
+  const { renderer, backend } = await createRenderer(T);
 
   const root = document.createElement('div');
   root.className = 'graph3d';
@@ -365,7 +354,7 @@ export async function createGraph3D(container, opts = {}) {
   let view = null;
   let mode = 'tower';
   let colorOf = () => '#cccccc';
-  let marks = { cut: new Set(), removed: new Set(), match: null, selected: null };
+  let marks = { cut: new Set(), removed: new Set(), match: null, selected: null, edited: new Set(), highlight: new Set() };
   let pos = new Map(); let boxes = new Map();
   const items = new Map(); // id -> { mesh, mat, outline, container }
   let pickables = [];
@@ -503,12 +492,18 @@ export async function createGraph3D(container, opts = {}) {
 
   function applyMarks() {
     for (const [id, it] of items) {
-      if (it.container) continue;
+      if (it.container) {
+        // Containers (expanded layers / blocks) show edit and highlight marks on their outline.
+        const c = marks.highlight?.has(id) ? '#8e44ad' : marks.edited?.has(id) ? '#f28e2b' : null;
+        it.line?.material.color.set(c || cssVar('--border', '#cccccc'));
+        continue;
+      }
       const dim = marks.match && !marks.match.has(id);
       const removed = marks.removed.has(id);
       it.mat.transparent = dim || removed;
       it.mat.opacity = dim ? 0.15 : removed ? 0.35 : 1;
-      const ring = marks.cut.has(id) ? '#d9534f' : (marks.selected === id || marks.match?.has(id)) ? '#2457c5' : null;
+      const ring = marks.cut.has(id) ? '#d9534f' : (marks.selected === id || marks.match?.has(id)) ? '#2457c5'
+        : marks.highlight?.has(id) ? '#8e44ad' : marks.edited?.has(id) ? '#f28e2b' : null;
       if (ring && !it.outline) {
         it.outline = new T.LineSegments(edgeGeo, new T.LineBasicMaterial({ color: ring }));
         it.outline.scale.set(1.08, 1.08, 1.08);
@@ -666,6 +661,7 @@ export async function createGraph3D(container, opts = {}) {
   resize();
 
   return {
+    backend,
     get mode() { return mode; },
     /** Full data swap: view is the /graph JSON, colorOf(node) returns a CSS colour. */
     setData(nextView, nextColorOf, refit = true) {

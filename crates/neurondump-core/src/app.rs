@@ -18,7 +18,10 @@ use crate::model::ModelHandle;
 use crate::slim::{slim, SlimOptions};
 use crate::stats::{compute_stats, StatsOptions, StatsReport};
 use crate::tokenizer::Vocab;
-use crate::trace::{trace, SimRequest, SweepReport, SweepRequest, TraceReport, TraceRequest};
+use crate::chat::{render_chat, ChatRequest};
+use crate::edits::{bake, compile, Compiled, Edit, EditOp, EditStack};
+use crate::tokens::EmbeddingMap;
+use crate::trace::{trace, GenerateRequest, JourneyRequest, Sampling, SimRequest, SweepReport, SweepRequest, TraceReport, TraceRequest};
 use crate::util::{fnv1a, now_unix, Cancelled, Progress};
 
 pub struct App {
@@ -27,7 +30,126 @@ pub struct App {
     handles: Mutex<HashMap<String, Arc<ModelHandle>>>,
     vocabs: Mutex<HashMap<String, Arc<Vocab>>>,
     graphs: Mutex<HashMap<String, Arc<ModelGraph>>>,
+    edits: Mutex<HashMap<String, EditStack>>,
+    maps: Mutex<HashMap<String, Arc<EmbeddingMap>>>,
     pub jobs: JobManager,
+}
+
+/// The prompt part shared by journey / generate / compare jobs.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PromptParams {
+    #[serde(default)]
+    pub prompt: String,
+    /// Wrap the prompt in the model's chat template.
+    #[serde(default)]
+    pub chat: bool,
+    #[serde(default)]
+    pub system: Option<String>,
+    #[serde(default)]
+    pub template: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct JourneyParams {
+    #[serde(flatten)]
+    pub prompt: PromptParams,
+    /// Position to inspect; negative counts from the end (default -1).
+    #[serde(default)]
+    pub token: Option<i64>,
+    /// Token ids appended after the prompt (generated tokens from a timeline).
+    #[serde(default)]
+    pub append: Vec<u32>,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+    /// Edits to apply (default: the model's current edit stack).
+    #[serde(default)]
+    pub edits: Option<Vec<Edit>>,
+    /// Ignore the edits.
+    #[serde(default)]
+    pub baseline: bool,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct GenerateParams {
+    #[serde(flatten)]
+    pub prompt: PromptParams,
+    #[serde(default)]
+    pub steps: Option<usize>,
+    #[serde(default)]
+    pub explain: bool,
+    /// Sampling overrides (otherwise greedy, or the stack's `sampling` edit).
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub sample_top_k: Option<usize>,
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Alternatives recorded per step.
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+    #[serde(default)]
+    pub edits: Option<Vec<Edit>>,
+    #[serde(default)]
+    pub baseline: bool,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CompareParams {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub prompts: Vec<String>,
+    #[serde(default)]
+    pub chat: bool,
+    #[serde(default)]
+    pub corpus: Vec<String>,
+    #[serde(default)]
+    pub corpus_file: Option<PathBuf>,
+    /// Tokens generated per prompt on both sides.
+    #[serde(default)]
+    pub tokens: Option<usize>,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+    #[serde(default)]
+    pub edits: Option<Vec<Edit>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompareResult {
+    pub edits: Vec<Edit>,
+    pub compiled: Compiled,
+    pub simulation: crate::trace::SimReport,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct BakeParams {
+    #[serde(default)]
+    pub edits: Option<Vec<Edit>>,
+    /// Plain file name (written to `<output_dir>/bake/`) or, from the CLI, a path.
+    pub out: String,
+}
+
+/// The edit stack as the front ends show it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EditView {
+    pub model: String,
+    pub digest: String,
+    pub edits: Vec<Edit>,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub active: usize,
+    /// Compilation of the enabled edits (None when it failed, see `error`).
+    pub compiled: Option<Compiled>,
+    pub error: Option<String>,
+    pub snapshots: Vec<String>,
 }
 
 /// Parameters of an `ablate` job.
@@ -75,6 +197,8 @@ impl App {
             handles: Mutex::new(HashMap::new()),
             vocabs: Mutex::new(HashMap::new()),
             graphs: Mutex::new(HashMap::new()),
+            edits: Mutex::new(HashMap::new()),
+            maps: Mutex::new(HashMap::new()),
             jobs,
         })
     }
@@ -231,8 +355,19 @@ impl App {
     /// Returns the result and whether it came from the cache.
     pub fn run(&self, kind: JobKind, model: &str, params: Value, p: &dyn Progress) -> Result<(Value, bool)> {
         let m = self.open(model)?;
-        let params = if params.is_null() { Value::Object(Default::default()) } else { params };
-        let cacheable = matches!(kind, JobKind::Inspect | JobKind::Stats | JobKind::Trace | JobKind::Ablate | JobKind::Sweep);
+        let mut params = if params.is_null() { Value::Object(Default::default()) } else { params };
+        if matches!(kind, JobKind::Journey | JobKind::Generate | JobKind::Compare | JobKind::Bake) {
+            // Jobs see the edit stack as it was when they started (and are cached on it).
+            if let Some(o) = params.as_object_mut() {
+                if o.get("edits").is_none_or(Value::is_null) {
+                    o.insert("edits".into(), serde_json::to_value(self.edit_stack(&m).enabled())?);
+                }
+            }
+        }
+        let cacheable = matches!(
+            kind,
+            JobKind::Inspect | JobKind::Stats | JobKind::Trace | JobKind::Ablate | JobKind::Sweep | JobKind::Journey | JobKind::Generate | JobKind::Compare
+        );
         if cacheable {
             if let Some(v) = self.cache_get(&m, kind.as_str(), &params) {
                 p.set(100.0, "cached");
@@ -307,7 +442,105 @@ impl App {
                 self.invalidate_graph(&m);
                 serde_json::to_value(r)?
             }
+            JobKind::Journey => {
+                let o: JourneyParams = serde_json::from_value(params.clone()).context("journey params")?;
+                let c = self.compile_for(&m, o.edits.as_deref().unwrap_or_default(), o.baseline)?;
+                let g = self.graph(&m)?;
+                let req = JourneyRequest {
+                    text: self.prompt_text(&m, &o.prompt, &c)?,
+                    append: o.append.clone(),
+                    token: o.token.unwrap_or(-1),
+                    top_k: o.top_k.unwrap_or(5),
+                    max_tokens: o.max_tokens.unwrap_or(256),
+                    ablation: c.intervention.clone(),
+                    buckets: g.dims.iter().map(|(l, d)| (*l, d.bucket)).collect(),
+                };
+                serde_json::to_value(crate::trace::journey(&m, &req, p)?)?
+            }
+            JobKind::Generate => {
+                let o: GenerateParams = serde_json::from_value(params.clone()).context("generate params")?;
+                let c = self.compile_for(&m, o.edits.as_deref().unwrap_or_default(), o.baseline)?;
+                let mut sampling = c.sampling.clone().unwrap_or_default();
+                if let Some(t) = o.temperature {
+                    sampling.temperature = t.max(0.0);
+                }
+                if o.sample_top_k.is_some() {
+                    sampling.top_k = o.sample_top_k;
+                }
+                if o.top_p.is_some() {
+                    sampling.top_p = o.top_p;
+                }
+                if o.seed.is_some() {
+                    sampling.seed = o.seed;
+                }
+                let req = GenerateRequest {
+                    text: self.prompt_text(&m, &o.prompt, &c)?,
+                    steps: o.steps.unwrap_or(16).clamp(1, 512),
+                    explain: o.explain,
+                    sampling,
+                    top_k: o.top_k.unwrap_or(5),
+                    max_tokens: o.max_tokens.unwrap_or(512),
+                    ablation: c.intervention.clone(),
+                };
+                serde_json::to_value(crate::trace::generate(&m, &req, p)?)?
+            }
+            JobKind::Compare => {
+                let o: CompareParams = serde_json::from_value(params.clone()).context("compare params")?;
+                let edits = o.edits.clone().unwrap_or_default();
+                let c = self.compile_for(&m, &edits, false)?;
+                let mut corpus = o.corpus.clone();
+                if let Some(f) = &o.corpus_file {
+                    corpus.extend(crate::trace::read_corpus(f)?);
+                }
+                let mut texts = o.prompts.clone();
+                texts.extend(o.prompt.clone());
+                if texts.is_empty() && corpus.is_empty() {
+                    texts.push("The name of the star that Earth orbits is".into());
+                }
+                // A prompt edit only means something in chat format: use it on both sides.
+                let chat = o.chat || c.prompt_edited();
+                let base = Compiled::default();
+                let mut prompts = Vec::new();
+                let mut edited_prompts = Vec::new();
+                for t in &texts {
+                    let pp = PromptParams { prompt: t.clone(), chat, ..Default::default() };
+                    prompts.push(self.prompt_text(&m, &pp, &base)?);
+                    edited_prompts.push(self.prompt_text(&m, &pp, &c)?);
+                }
+                let req = SimRequest {
+                    ablation: c.intervention.clone(),
+                    cut: c.touched.clone(),
+                    prompts,
+                    edited_prompts,
+                    sampling: c.sampling.clone().unwrap_or_default(),
+                    decisions: true,
+                    corpus,
+                    gen_tokens: o.tokens.unwrap_or(16),
+                    top_k: o.top_k.unwrap_or(5),
+                    max_tokens: o.max_tokens.unwrap_or(256),
+                };
+                let sim = crate::trace::require_backend(&m)?.simulate(&m, &req, p)?;
+                serde_json::to_value(CompareResult { edits, compiled: c, simulation: sim })?
+            }
+            JobKind::Bake => {
+                let o: BakeParams = serde_json::from_value(params.clone()).context("bake params (need out)")?;
+                let edits = o.edits.clone().unwrap_or_default();
+                if edits.iter().all(|e| !e.enabled) {
+                    anyhow::bail!("nothing to bake: the edit stack is empty or every edit is off");
+                }
+                let out = match crate::slim::safe_file_name(&o.out) {
+                    Ok(n) => {
+                        let n = if n.to_lowercase().ends_with(".gguf") { n.to_string() } else { format!("{n}.gguf") };
+                        self.config.output_dir.join("bake").join(n)
+                    }
+                    Err(_) => PathBuf::from(&o.out),
+                };
+                let g = self.graph(&m)?;
+                let v = self.vocab(&m).ok();
+                serde_json::to_value(bake(&m, &g, v.as_deref(), &edits, &out, p)?)?
+            }
         };
+
         if matches!(kind, JobKind::Stats | JobKind::Inspect) {
             self.invalidate_graph(&m);
         }
@@ -355,6 +588,125 @@ impl App {
             }
         })?;
         Ok(id)
+    }
+
+    // --- edits ---------------------------------------------------------------------------
+
+    /// A copy of the model's edit stack.
+    pub fn edit_stack(&self, m: &ModelHandle) -> EditStack {
+        self.edits.lock().unwrap().get(&m.entry.id).cloned().unwrap_or_default()
+    }
+
+    /// Changes the stack; a change whose result does not compile is rolled back.
+    pub fn edit<T>(&self, m: &ModelHandle, f: impl FnOnce(&mut EditStack) -> Result<T>) -> Result<T> {
+        let g = self.graph(m)?;
+        let v = self.vocab(m).ok();
+        let mut all = self.edits.lock().unwrap();
+        let stack = all.entry(m.entry.id.clone()).or_default();
+        let before = stack.clone();
+        let r = f(stack)?;
+        if let Err(e) = compile(&g, v.as_deref(), &stack.edits) {
+            *stack = before;
+            return Err(e);
+        }
+        Ok(r)
+    }
+
+    pub fn push_edit(&self, m: &ModelHandle, op: EditOp, label: Option<String>) -> Result<u64> {
+        self.edit(m, |s| Ok(s.push(op, label)))
+    }
+
+    pub fn edit_view(&self, m: &ModelHandle) -> Result<EditView> {
+        let st = self.edit_stack(m);
+        let g = self.graph(m)?;
+        let v = self.vocab(m).ok();
+        let (compiled, error) = match compile(&g, v.as_deref(), &st.edits) {
+            Ok(c) => (Some(c), None),
+            Err(e) => (None, Some(format!("{e:#}"))),
+        };
+        Ok(EditView {
+            model: m.entry.name.clone(),
+            digest: m.entry.digest.clone(),
+            active: st.edits.iter().filter(|e| e.enabled).count(),
+            can_undo: st.can_undo(),
+            can_redo: st.can_redo(),
+            edits: st.edits,
+            compiled,
+            error,
+            snapshots: crate::edits::list_snapshots(&self.config.output_dir, m),
+        })
+    }
+
+    pub fn save_snapshot(&self, m: &ModelHandle, name: &str) -> Result<PathBuf> {
+        crate::edits::save_snapshot(&self.config.output_dir, m, name, &self.edit_stack(m).edits)
+    }
+
+    pub fn load_snapshot(&self, m: &ModelHandle, name: &str) -> Result<Vec<String>> {
+        let f = crate::edits::load_snapshot(&self.config.output_dir, m, name)?;
+        self.import_edits(m, f)
+    }
+
+    /// Replaces the stack with a portable `edits.json`; returns warnings.
+    pub fn import_edits(&self, m: &ModelHandle, f: crate::edits::EditsFile) -> Result<Vec<String>> {
+        let mut warnings = Vec::new();
+        if !f.digest.is_empty() && f.digest != m.entry.digest {
+            warnings.push(format!("these edits were made for {} ({}); node ids may not match", f.model, f.digest));
+        }
+        self.edit(m, |s| {
+            s.replace(f.edits);
+            Ok(())
+        })?;
+        Ok(warnings)
+    }
+
+    fn compile_for(&self, m: &ModelHandle, edits: &[Edit], baseline: bool) -> Result<Compiled> {
+        if baseline {
+            return Ok(Compiled::default());
+        }
+        let g = self.graph(m)?;
+        let v = self.vocab(m).ok();
+        compile(&g, v.as_deref(), edits)
+    }
+
+    /// The text fed to the model: raw, or chat-templated (always when a prompt edit is active).
+    pub fn prompt_text(&self, m: &ModelHandle, pp: &PromptParams, c: &Compiled) -> Result<String> {
+        if !pp.chat && !c.prompt_edited() {
+            return Ok(pp.prompt.clone());
+        }
+        let v = self.vocab(m).ok();
+        let req = ChatRequest {
+            prompt: pp.prompt.clone(),
+            system: c.system.clone().or_else(|| pp.system.clone()),
+            template: c.template.clone().or_else(|| pp.template.clone()),
+        };
+        Ok(render_chat(m, v.as_deref(), &req)?.text)
+    }
+
+    /// Sampling of the current stack (for display).
+    pub fn current_sampling(&self, m: &ModelHandle) -> Option<Sampling> {
+        self.edit_view(m).ok().and_then(|v| v.compiled).and_then(|c| c.sampling)
+    }
+
+    /// The PCA embedding map, from memory, the disk cache or computed.
+    pub fn embedding_map(&self, m: &ModelHandle, p: &dyn Progress) -> Result<Arc<EmbeddingMap>> {
+        if let Some(e) = self.maps.lock().unwrap().get(&m.entry.id) {
+            return Ok(e.clone());
+        }
+        let path = self.config.output_dir.join("cache").join(&m.entry.digest).join("embedmap-v1.bin");
+        let map = match EmbeddingMap::load(&path) {
+            Ok(e) => e,
+            Err(_) => {
+                let v = self.vocab(m).ok();
+                let e = crate::tokens::embedding_map(m, v.as_deref(), p)?;
+                if let Err(err) = e.save(&path) {
+                    tracing::warn!("embedding map cache {}: {err}", path.display());
+                }
+                e
+            }
+        };
+        let map = Arc::new(map);
+        self.maps.lock().unwrap().insert(m.entry.id.clone(), map.clone());
+        Ok(map)
     }
 
     /// Parses a stored plan (CLI `slim --plan`).

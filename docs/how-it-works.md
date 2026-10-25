@@ -60,9 +60,10 @@ It also decodes the vocabulary into readable text and parses the chat template.
 
 ```text
 LAYER  LOGIT LENS (what the model would answer here)
-10     "olit" 0.04   "polit" 0.02
-11     " Rome" 0.35  " capitals" 0.07   ← the answer appears here
-15     " Rome" 0.84
+10     "otope" 0.03   "namen" 0.03
+11     " Earth" 0.08  " planets" 0.05   ← the topic appears here
+14     " called" 0.39
+15     " not" 0.17
 ```
 
 ## 5. Analyze

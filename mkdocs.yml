@@ -15,10 +15,15 @@ nav:
       - Analyze and slim: analyze-and-slim.md
       - Trace: trace.md
       - Graph and ablation: graph-and-ablation.md
-      - Web interface: web.md
+      - 3D graph: 3d-graph.md
+      - Interventions and edits: interventions.md
+      - Web interface: web-ui.md
   - Reference:
       - CLI reference: cli.md
+      - HTTP API: api.md
+      - Architecture: architecture.md
       - Internals: internals.md
+      - Limitations: limitations.md
       - Building: building.md
   - Research:
       - What's inside real models: models.md

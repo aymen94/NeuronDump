@@ -84,4 +84,4 @@ neurondump web --open # local web page
 
 Change the output folder with `neurondump config set output_dir <dir>`.
 
-Next: [How it works](internals.md) · [CLI reference](cli.md)
+Next: [How it works](internals.md) · [Architecture](architecture.md) · [CLI reference](cli.md)

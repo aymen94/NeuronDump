@@ -103,7 +103,7 @@ fn parse_vocab_range(id: &str, n_vocab: u32) -> Option<(u32, u32)> {
 }
 
 /// Tensors whose output is the block's contribution to the residual stream.
-fn block_out_tensors(graph: &ModelGraph, block_id: &str) -> Vec<String> {
+pub(crate) fn block_out_tensors(graph: &ModelGraph, block_id: &str) -> Vec<String> {
     let ts: Vec<&Node> = graph.tensors_under(block_id);
     let outs: Vec<String> = ts
         .iter()
@@ -673,7 +673,7 @@ pub fn simulate(m: &ModelHandle, impact: &StaticImpact, mut req: SimRequest, p: 
     req.ablation = impact.ablation.clone();
     req.cut = impact.cut.iter().map(|c| c.id.clone()).collect();
     if req.prompts.is_empty() && req.corpus.is_empty() {
-        req.prompts.push("The capital of Italy is".into());
+        req.prompts.push("The name of the star that Earth orbits is".into());
     }
     b.simulate(m, &req, p)
 }

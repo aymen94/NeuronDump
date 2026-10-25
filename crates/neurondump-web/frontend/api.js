@@ -28,6 +28,17 @@ export async function api(path, opts = {}) {
   return data;
 }
 
+/** Binary GET: resolves to { buffer, headers }. */
+export async function apiBinary(path) {
+  const r = await fetch('/api' + path, { headers: { 'x-neurondump-token': token } });
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { msg = (await r.json()).error || msg; } catch { /* not JSON */ }
+    throw new ApiError(r.status, msg);
+  }
+  return { buffer: await r.arrayBuffer(), headers: r.headers };
+}
+
 export function qs(obj) {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(obj)) if (v !== undefined && v !== null && v !== '') p.set(k, v);

@@ -29,7 +29,8 @@ use neurondump_core::graph::{GroupBy, Level, ViewOptions};
 use neurondump_core::inspect::{inspect, tensor_rows, InspectOptions, InspectReport};
 use neurondump_core::stats::{tensor_stats, TensorStats};
 use neurondump_core::template::template_report;
-use neurondump_core::tokenizer::VocabQuery;
+use neurondump_core::edits::EditOp;
+use neurondump_core::tokenizer::{TokenClass, VocabQuery};
 use neurondump_core::{App, JobKind, ModelSummary, NoProgress};
 
 pub const TOKEN_HEADER: &str = "x-neurondump-token";
@@ -192,6 +193,7 @@ async fn info(State(s): St) -> Json<Value> {
         "schema_version": neurondump_core::util::SCHEMA_VERSION,
         "output_dir": s.app.config.output_dir,
         "trace_architectures": neurondump_core::trace::supported_architectures(),
+        "job_kinds": ["inspect", "stats", "analyze", "slim", "trace", "ablate", "sweep", "journey", "generate", "compare", "bake"],
     }))
 }
 
@@ -372,7 +374,11 @@ async fn create_job(State(s): St, Json(req): Json<JobRequest>) -> ApiResult<(Sta
             o.remove("perplexity_corpus");
         }
     }
-    if matches!(kind, JobKind::Trace | JobKind::Ablate | JobKind::Sweep) {
+    if kind == JobKind::Bake {
+        let out = params.get("out").and_then(Value::as_str).unwrap_or("");
+        neurondump_core::slim::safe_file_name(out).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    }
+    if matches!(kind, JobKind::Trace | JobKind::Ablate | JobKind::Sweep | JobKind::Compare) {
         // Corpus files are paths on the server's disk; the web UI sends texts instead.
         if let Some(o) = params.as_object_mut() {
             o.remove("corpus_file");
@@ -584,6 +590,229 @@ async fn plan_from_ablation(State(s): St, Path(id): Path<String>, Json(b): Json<
     Ok(Json(v))
 }
 
+
+// --- token inspector / embedding map --------------------------------------------------
+
+async fn tokenize(State(s): St, Path(id): Path<String>, Json(req): Json<neurondump_core::tokens::TokenizeRequest>) -> ApiResult<Json<Value>> {
+    let v = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        let vocab = s.app.vocab(&m)?;
+        let banned = s.app.edit_view(&m).ok().and_then(|v| v.compiled).map(|c| c.intervention.mask_tokens).unwrap_or_default();
+        Ok(serde_json::to_value(neurondump_core::tokens::tokenize(&m, &vocab, &req, &banned, &NoProgress)?)?)
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct MapQuery {
+    format: Option<String>,
+}
+
+/// Binary Float32Array (x, y, z, class per token); `?format=json` describes it.
+async fn embedding_map(State(s): St, Path(id): Path<String>, Query(q): Query<MapQuery>) -> ApiResult<Response> {
+    let json_only = q.format.as_deref() == Some("json");
+    let map = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        s.app.embedding_map(&m, &NoProgress)
+    })
+    .await?;
+    if json_only {
+        return Ok(Json(serde_json::to_value(map.info()).unwrap_or_default()).into_response());
+    }
+    let info = map.info();
+    let bytes = tokio::task::spawn_blocking(move || map.to_f32_bytes()).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut resp = Response::new(Body::from(bytes));
+    let h = resp.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    for (k, v) in [("x-neurondump-count", info.count.to_string()), ("x-neurondump-stride", info.stride.to_string()), ("x-neurondump-explained", format!("{:.4},{:.4},{:.4}", info.explained[0], info.explained[1], info.explained[2]))] {
+        if let Ok(v) = HeaderValue::from_str(&v) {
+            h.insert(k, v);
+        }
+    }
+    Ok(resp)
+}
+
+/// Every token's decoded text, by id (for map labels and search).
+async fn vocab_texts(State(s): St, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let v = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        let v = s.app.vocab(&m)?;
+        Ok(json!({ "texts": v.tokens.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(), "classes": TokenClass::ALL.iter().map(|c| c.as_str()).collect::<Vec<_>>() }))
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+// --- edits ------------------------------------------------------------------------------
+
+fn edit_view(s: &AppState, id: &str) -> anyhow::Result<Value> {
+    let m = s.app.open_id(id)?;
+    Ok(serde_json::to_value(s.app.edit_view(&m)?)?)
+}
+
+async fn get_edits(State(s): St, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(blocking(move || edit_view(&s, &id)).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum EditBody {
+    /// Import / replace: `{"edits": [...]}` (the edits.json format).
+    Replace(neurondump_core::edits::EditsFile),
+    Push {
+        #[serde(flatten)]
+        op: EditOp,
+        #[serde(default)]
+        label: Option<String>,
+    },
+}
+
+async fn post_edit(State(s): St, Path(id): Path<String>, Json(b): Json<EditBody>) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        blocking(move || {
+            let m = s.app.open_id(&id)?;
+            let mut warnings = Vec::new();
+            match b {
+                EditBody::Replace(f) => warnings = s.app.import_edits(&m, f)?,
+                EditBody::Push { op, label } => {
+                    s.app.push_edit(&m, op, label)?;
+                }
+            }
+            let mut v = edit_view(&s, &id)?;
+            v["warnings"] = json!(warnings);
+            Ok(v)
+        })
+        .await?,
+    ))
+}
+
+/// Restore all (back to the original model; undoable).
+async fn delete_edits(State(s): St, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(blocking(move || edit_action(&s, &id, "restore")).await?))
+}
+
+async fn delete_edit(State(s): St, Path((id, n)): Path<(String, u64)>) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        blocking(move || {
+            let m = s.app.open_id(&id)?;
+            s.app.edit(&m, |st| st.remove(n))?;
+            edit_view(&s, &id)
+        })
+        .await?,
+    ))
+}
+
+async fn toggle_edit(State(s): St, Path((id, n)): Path<(String, u64)>) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        blocking(move || {
+            let m = s.app.open_id(&id)?;
+            s.app.edit(&m, |st| st.toggle(n))?;
+            edit_view(&s, &id)
+        })
+        .await?,
+    ))
+}
+
+fn edit_action(s: &AppState, id: &str, action: &str) -> anyhow::Result<Value> {
+    let m = s.app.open_id(id)?;
+    let changed = s.app.edit(&m, |st| {
+        Ok(match action {
+            "undo" => st.undo(),
+            "redo" => st.redo(),
+            _ => {
+                st.restore();
+                true
+            }
+        })
+    })?;
+    let mut v = edit_view(s, id)?;
+    v["changed"] = json!(changed);
+    Ok(v)
+}
+
+async fn undo_edits(State(s): St, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(blocking(move || edit_action(&s, &id, "undo")).await?))
+}
+
+async fn redo_edits(State(s): St, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(blocking(move || edit_action(&s, &id, "redo")).await?))
+}
+
+async fn restore_edits(State(s): St, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(blocking(move || edit_action(&s, &id, "restore")).await?))
+}
+
+/// The stack as a portable edits.json download.
+async fn export_edits(State(s): St, Path(id): Path<String>) -> ApiResult<Response> {
+    let (text, name) = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        let f = neurondump_core::edits::EditsFile::new(&m, None, s.app.edit_stack(&m).edits);
+        let base: String = m.entry.name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
+        Ok((serde_json::to_string_pretty(&f)?, format!("{base}.edits.json")))
+    })
+    .await?;
+    let mut resp = Response::new(Body::from(text));
+    resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+        resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+    }
+    Ok(resp)
+}
+
+async fn list_snapshots(State(s): St, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        blocking(move || {
+            let m = s.app.open_id(&id)?;
+            Ok(json!({ "snapshots": neurondump_core::edits::list_snapshots(&s.app.config.output_dir, &m) }))
+        })
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct SnapshotBody {
+    name: String,
+    /// `save` (default) or `load`.
+    #[serde(default)]
+    action: Option<String>,
+}
+
+async fn post_snapshot(State(s): St, Path(id): Path<String>, Json(b): Json<SnapshotBody>) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        blocking(move || {
+            let m = s.app.open_id(&id)?;
+            let mut warnings = Vec::new();
+            match b.action.as_deref().unwrap_or("save") {
+                "save" => {
+                    s.app.save_snapshot(&m, &b.name)?;
+                }
+                "load" => warnings = s.app.load_snapshot(&m, &b.name)?,
+                other => anyhow::bail!("unknown snapshot action {other:?} (save, load)"),
+            }
+            let mut v = edit_view(&s, &id)?;
+            v["warnings"] = json!(warnings);
+            Ok(v)
+        })
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct BakeBody {
+    out: String,
+}
+
+/// Writes the enabled edits into a new GGUF under `<output_dir>/bake/` (a job).
+async fn post_bake(State(s): St, Path(id): Path<String>, Json(b): Json<BakeBody>) -> ApiResult<(StatusCode, Json<Value>)> {
+    neurondump_core::slim::safe_file_name(&b.out).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    if s.app.library().by_id(&id).is_none() {
+        return Err(not_found("model"));
+    }
+    let jid = s.app.submit(JobKind::Bake, &id, json!({ "out": b.out }))?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "id": jid }))))
+}
+
 /// The full router (exposed for tests and embedding).
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
@@ -601,6 +830,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/models/{id}/nodes/{node}", get(graph_node))
         .route("/models/{id}/impact", post(impact))
         .route("/models/{id}/plan-from-ablation", post(plan_from_ablation))
+        .route("/models/{id}/tokenize", post(tokenize))
+        .route("/models/{id}/embedding-map", get(embedding_map))
+        .route("/models/{id}/vocab/texts", get(vocab_texts))
+        .route("/models/{id}/edits", get(get_edits).post(post_edit).delete(delete_edits))
+        .route("/models/{id}/edits/export", get(export_edits))
+        .route("/models/{id}/edits/undo", post(undo_edits))
+        .route("/models/{id}/edits/redo", post(redo_edits))
+        .route("/models/{id}/edits/restore", post(restore_edits))
+        .route("/models/{id}/edits/{n}", delete(delete_edit))
+        .route("/models/{id}/edits/{n}/toggle", post(toggle_edit))
+        .route("/models/{id}/snapshots", get(list_snapshots).post(post_snapshot))
+        .route("/models/{id}/bake", post(post_bake))
         .route("/jobs", post(create_job).get(list_jobs))
         .route("/jobs/{id}", get(get_job))
         .route("/jobs/{id}", delete(cancel_job))

@@ -210,7 +210,7 @@ job <id from jobs>
 use nomic-embed-text
 compare llama3.2:1b
 export --format csv --table layers
-trace The capital of Italy is
+trace The name of the star that Earth orbits is
 web
 exit
 ```
@@ -230,7 +230,7 @@ node L7
 cut layer.7 layer.7.attn.head.3
 selection
 impact
-simulate The capital of Italy is --tokens 4
+simulate The name of the star that Earth orbits is --tokens 4
 simulate &
 plan save C:/Users/<you>/llama-cut.plan.json
 uncut all
@@ -361,7 +361,7 @@ Load in llama.cpp (this build uses `llama-completion` for one-shot prompts; `lla
 ```sh
 llama-completion -m ~/neurondump/slim/llama-vocab.gguf -p "The quick brown fox" -n 12 --temp 0 -no-cnv
 llama-completion -m "$(blob llama3.2:1b)" -p "The quick brown fox" -n 12 --temp 0 -no-cnv
-llama-completion -m ~/neurondump/slim/llama-15l.gguf -p "The capital of Italy is" -n 10 --temp 0 -no-cnv
+llama-completion -m ~/neurondump/slim/llama-15l.gguf -p "The name of the star that Earth orbits is" -n 10 --temp 0 -no-cnv
 llama-cli -m ~/neurondump/slim/llama-noreserved.gguf          # interactive chat, type a question, Ctrl-C to quit
 llama-perplexity -m ~/neurondump/slim/llama-noreserved.gguf -f /tmp/corpus.txt -c 64
 ```
@@ -393,7 +393,7 @@ ollama rm llama-vocab llama-noreserved nomic-mini   # clean up
 - `low_norm_heads` → `Refused low_norm_heads: …non-uniform shapes…`, `Applied -`.
 - **Compare:** the original and `llama-vocab` both continue "jumps over the lazy dog." and then diverge
   (the slim model can only emit 570 tokens). The 15-layer model loads and generates, with visibly
-  worse quality (`-p "The capital of Italy is"` continued " not a country that exists in the world of art"). `llama-noreserved`
+  worse quality (`-p "The name of the star that Earth orbits is"` continued " not a country that exists in the world of art"). `llama-noreserved`
   must be indistinguishable from the original. The Ollama runs reply normally, with the original
   template, stop tokens and parameters. `nomic-mini` returns a 768-dim embedding.
 
@@ -418,7 +418,7 @@ Hand-edit `/tmp/llama.prune.json` (set `"selected": true` on `reserved_tokens`) 
 **What to test:** per-layer internals, the logit lens, corpus aggregation, embedding contributions.
 
 ```sh
-nd trace llama3.2:1b --prompt "The capital of Italy is"
+nd trace llama3.2:1b --prompt "The name of the star that Earth orbits is"
 nd trace qwen2.5-coder:7b --prompt "def fibonacci(n):"
 nd trace qwen3:8b --prompt "The opposite of hot is"
 nd trace nomic-embed-text --prompt "search_query: what is rust?"
@@ -428,10 +428,13 @@ nd analyze llama3.2:1b --out /tmp/llama-trace.prune.json        # layer candidat
 nd --json trace llama3.2:1b --prompt "Hi" --top-k 3 | python -c "import json,sys;r=json.load(sys.stdin);print(len(r['layers']), r['prediction'][0])"
 ```
 
-**Expected:** for llama3.2:1b, 6 tokens starting with `<|begin_of_text|>`. The logit lens is noise for
-layers 0–10. **" Rome" appears at layer 11 (0.35)**, reaches 0.85 at layer 13, and the final prediction is
-`next token: " Rome" 0.838`. cos(in,out) rises from ≈0.3 (layer 0) to ≈0.93 (layer 12) and drops in the
-last layer. Layer 1 has one huge neuron (index 1417, ≈194). Runtime is about 3 s.
+**Expected:** for llama3.2:1b, 10 tokens starting with `<|begin_of_text|>` (`The`, ` name`, ` of`, ` the`,
+` star`, ` that`, ` Earth`, ` orbits`, ` is`). The logit lens is noise for layers 0–10. The topic appears
+at layer 11 (`" Earth" 0.08  " planets" 0.05 … " astronomers" 0.04`), layer 14 is sure of the phrasing
+(`" called" 0.39`), and the last layer changes its mind: `next token: " not" 0.166  " the" 0.070  " a" 0.067
+" called" 0.051`. The 1B model never puts " Sun" in its top 5 here. cos(in,out) rises from ≈0.33 (layer 0)
+to ≈0.94 (layers 12–13) and drops to 0.51 in the last layer. Layer 1 has one huge neuron (index 1417,
+≈116). Runtime is about 3.5 s.
 For qwen2.5-coder, the top next token is `" \n"`; compare with
 `llama-completion -m "$(blob qwen2.5-coder:7b)" -p "def fibonacci(n):" -n 1 --temp 0 -no-cnv`.
 nomic prints `token contributions to pooled embedding` per token (≈0.9 each) and no logit lens.
@@ -588,7 +591,7 @@ nd --json stats ~/neurondump/slim/llama-zero.gguf --tensor blk.9.attn_output.wei
 for t in json.load(sys.stdin)['tensors']:
     rn,cn=t.get('row_norms'),t.get('col_norms')
     print(t['name'],'l2=%.2f'%t['l2'],'rows0-63=0:',rn and all(x==0 for x in rn[:64]),'cols192-255=0:',cn and all(x==0 for x in cn[192:256]))"
-llama-completion -m ~/neurondump/slim/llama-zero.gguf -p "The capital of Italy is" -n 10 --temp 0 -no-cnv
+llama-completion -m ~/neurondump/slim/llama-zero.gguf -p "The name of the star that Earth orbits is" -n 10 --temp 0 -no-cnv
 ```
 
 **Expected:**
@@ -605,7 +608,8 @@ llama-completion -m ~/neurondump/slim/llama-zero.gguf -p "The capital of Italy i
 - **Head + neuron bucket + block:** 655K params zeroed, 3–4 tensors.
   - **After slim:** `Applied zero_weights`, `Size 1.23 GiB (unchanged)`, `Zeroed 4 tensor(s)` and `Validate OK (147 tensors …)`.
   - **Stats check:** `blk.9.attn_output.weight l2=0.00`. `blk.7.attn_output` has columns 192–255 zero (head 3). `blk.7.ffn_up` has rows 0–63 zero.
-  - **llama.cpp:** still continues "The capital of Italy is" with " Rome. Rome is a city located in the central", the same as the original.
+  - **llama.cpp:** the original continues "The name of the star that Earth orbits is" with " not a fixed or constant name. It is a"
+    (the same text as NeuronDump's in-memory baseline); the zeroed file answers " called the Sun. The Sun is a massive ball".
 - **`layer.3,layer.4`:** RISKY. The two removed layers are bypassed together, so the path from input to output stays.
 - **`output_norm`:** BREAKS_MODEL (no path to the output).
 - **`vocab:128000-128010`:** BREAKS_MODEL. It shows:
@@ -643,10 +647,10 @@ Water boils at one hundred degrees Celsius at sea level. Ice melts at zero degre
 
 Once upon a time there was a little girl who lived in a village near the forest.
 EOF
-nd ablate llama3.2:1b --cut layer.7  --prompt "The capital of Italy is" --tokens 12
-nd ablate llama3.2:1b --cut layer.15 --prompt "The capital of Italy is" --tokens 12
+nd ablate llama3.2:1b --cut layer.7  --prompt "The name of the star that Earth orbits is" --tokens 12
+nd ablate llama3.2:1b --cut layer.15 --prompt "The name of the star that Earth orbits is" --tokens 12
 for c in layer.7 layer.15 layer.0; do nd ablate llama3.2:1b --cut $c --corpus /tmp/corpus5.txt --tokens 0 --prompt Hi | grep -E "^corpus|^KL"; done
-nd ablate llama3.2:1b --cut layer.7.attn.head.3 --prompt "The capital of Italy is" --tokens 4 | grep -E "KL|tokens/s"
+nd ablate llama3.2:1b --cut layer.7.attn.head.3 --prompt "The name of the star that Earth orbits is" --tokens 4 | grep -E "KL|tokens/s"
 nd ablate nomic-embed-text --cut layer.5 --prompt "search_query: what is rust?" --tokens 0 | grep -E "cosine|embedding"
 nd ablate oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --cut layer.4,layer.5,layer.6,layer.7 | tail -3   # static only + note
 
@@ -662,20 +666,22 @@ ollama rm llama-sweep14
 ```
 
 **Expected:**
-- **`layer.7`, prompt "The capital of Italy is":**
-  - baseline `" Rome" 0.838`, ablated `" Rome" 0.614`; `KL(baseline || ablated) = 0.21 nats; top-1 unchanged`.
-  - Greedy text changes from `" Rome. Rome is a city located in the central region of"` to
-    `" Rome, but it's not the capital of Italy. Rome"`: the cut model contradicts itself.
-  - The lens table marks `7 (cut)`. `P(" Rome")` is 0.352 → 0.049 at layer 11, 0.491 → 0.049 at layer 12
-    and 0.838 → 0.614 at the end.
+- **`layer.7`, prompt "The name of the star that Earth orbits is":**
+  - baseline `" not" 0.166  " the" 0.070  " a" 0.067`, ablated `" a" 0.157  " not" 0.118`;
+    `KL(baseline || ablated) = 0.5473 nats; top-1 CHANGED`.
+  - Greedy text changes from `" not a fixed or constant name. It is a name that"` to
+    `" a bit of a mystery, but I'll give you some"`.
+  - The lens table marks `7 (cut)`. Layers before 7 are identical; after it the lens drifts
+    (layer 11 `" Earth" 0.08` → `" nicknamed" 0.03`), and `P(" not")` is 0.166 → 0.118 at the end.
   - `weights in use: 1.22 GiB -> 1.16 GiB`. Takes about 35 s on CPU.
-- **`layer.15` on that one prompt:** KL is only 0.12, and " Rome" even rises to 0.926 (the answer is
-  already decided at layer 14). Greedy text: `" Rome. However, there are several other cities in Italy that"`.
-  The corpus is the fair comparison, and there **the last layer hurts much more**:
+- **`layer.15` on that one prompt:** KL 1.6020, top-1 CHANGED to `" called" 0.387`: without the last layer
+  the output is layer 14's lens (`" called" 0.39`), so the last layer is what turns " called" into " not".
+  Greedy text: `" called the star itself, but it is also called the star"`.
+  The corpus is the fair comparison, and there too **the last layer hurts much more**:
   - **layer 7:** `perplexity 7.554 -> 10.915, mean KL 0.2623`;
   - **layer 15:** `7.554 -> 15.976, mean KL 0.6710`;
   - **layer 0:** `7.554 -> 23257.776, mean KL 7.94, top-1 agreement 0.0%`.
-- **Head 3 of layer 7:** KL ≈ 0.003 (a single head barely matters).
+- **Head 3 of layer 7:** KL 0.0043, top-1 unchanged (a single head barely matters).
 - **nomic:** `embedding |v|  22.815 → 22.722` and `embedding cosine(baseline, ablated) = 0.9872`. No top-k (no output head).
 - **qwen3.5:** static impact only, ending with `(no simulation: see the notes above; showing static impact only)`,
   since there is no qwen35 forward pass.
@@ -709,11 +715,12 @@ it works offline:
 wamr3d 0.9.4 (MIT, WebGPU with a WebGL 2 fallback) draws all four views. It is in
 `crates/neurondump-web/frontend/vendor/wamr3d/` and is loaded only when the graph tab opens.
 
-Open `nd web --open`, pick `llama3.2:1b`, then the **graph** tab. The first toolbar control is
-**view**: `3D tower` (default), `3D city`, `3D force` or `2D`. The choice is remembered,
-and `#/model/<id>/graph?view=2d` forces one.
+Open `nd web --open`, pick `llama3.2:1b`, then the **graph** tab. The toolbar starts with the
+**2D / 3D** toggle; in 3D the **3D layout** menu offers `dataflow` (default since Phase 14, see
+section 14), `tower`, `city` and `force`. The choice is remembered, and `#/model/<id>/graph?view=2d`
+(or `?view=tower|city|force|flow`) forces one.
 
-0. **3D tower (default):**
+0. **3D tower** (3D layout → tower):
    - Input is at the bottom, then the 16 layers as stacked floors (Body), then Output, Tokenizer and
      Chat template on top. The status line says `26 nodes · 22 connections`.
    - Containers are drawn as outlines; clicking one selects it. Hovering shows a tooltip (label, kind,
@@ -760,7 +767,7 @@ curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"cut":["layer.7
 curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"cut":["token_embd"]}' "$U/models/$M/impact" | python -c "import json,sys;i=json.load(sys.stdin);print(i['verdict'],i['refused'])"
 curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"cut":["layer.6","layer.12"]}' "$U/models/$M/plan-from-ablation"
 curl -s -H "$H" -X POST -H "content-type: application/json" \
-  -d '{"kind":"ablate","model":"'$M'","params":{"cut":["layer.7"],"prompt":"The capital of Italy is","tokens":4}}' "$U/jobs"
+  -d '{"kind":"ablate","model":"'$M'","params":{"cut":["layer.7"],"prompt":"The name of the star that Earth orbits is","tokens":4}}' "$U/jobs"
 J=$(curl -s -H "$H" -X POST -H "content-type: application/json" \
   -d '{"kind":"sweep","model":"'$M'","params":{"level":"head","layer":7,"corpus":["Paris is the capital of France. Berlin is the capital of Germany."],"corpus_file":"/etc/passwd"}}' "$U/jobs" \
   | python -c "import json,sys;print(json.load(sys.stdin)['id'])")
@@ -785,6 +792,326 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://127.0.0.1:7878/a
 
 ---
 
+## 14. 3D model graph with wamr3d (Phase 14)
+
+**What to test:** the 2D / 3D toggle, the 3D dataflow view (instancing, picking, search, fly-to, level
+of detail), the `auto` backend and its WebGL 2 fallback, the token flow animation, the embedding map,
+and that the vendored engine is served correctly.
+
+**Status:** built only; the numbers below marked *record* have not been measured yet. Fill them in on
+the first run.
+
+Setup: `cargo build --release --features trace`, `ollama pull qwen2.5:0.5b` (not installed on the
+original test machine), then `nd web --open`. Ids: `llama3.2:1b` = `17d2889ccc34`,
+`qwen2.5:0.5b` = `7f1452142d64`, `nomic-embed-text:latest` = `84bf674d64ec`,
+`oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU` = `4d459e28845e`. (The qwen3.5 community model's name starts
+with **`o`**: `amazonasgabriel/…` does not exist.)
+
+```sh
+sh scripts/vendor-wamr3d.sh && git status --short crates/neurondump-web/frontend/vendor   # only README.txt may change
+T=<token>; U=http://127.0.0.1:7878
+curl -sI $U/assets/vendor/wamr3d/wamr3d_wasm_bg.wasm | grep -iE "^HTTP|content-type"
+curl -sI $U/assets/vendor/wamr3d/compat.js | grep -iE "^HTTP|content-type"
+curl -sI $U/assets/flow3d.js | grep -iE "^HTTP|content-type"
+```
+
+**Expected (assets):**
+- the vendor script prints `vendored wamr3d 0.9.4 …` and leaves every vendored file unchanged;
+- `.wasm` → `HTTP/1.1 200 OK` and `content-type: application/wasm`; `.js` → `text/javascript; charset=utf-8`.
+
+**Browser, `llama3.2:1b`, graph tab** (Chrome or Edge on this machine, `http://127.0.0.1:7878`):
+
+1. **Toggle:** the toolbar starts with `[2D | 3D]`; 3D is selected by default with layout `dataflow`.
+   The badge next to it says **`WebGPU`** (Chrome with a GPU). The status line says `26 nodes · 22 connections`
+   at layer level (same as 2D).
+2. **3D dataflow:** Input at the bottom, `layer 0` … `layer 15` as slabs stacked upwards, Output on top,
+   Tokenizer and Chat template to the right near the input. Dataflow edges run up the column.
+3. **2D:** press `2D` → the flat diagram of section 13. Back to `3D`: the camera framing is restored.
+   The choice survives a reload; `#/model/17d2889ccc34/graph?view=2d` forces 2D, `?view=tower` the tower.
+4. **Picking / hover:** hover `layer 7` → tooltip `layer 7 layer · 60.8M · 58.00 MiB · risky`
+   (sizes as in the 2D view). Click → side panel opens; the slab gets a blue outline.
+5. **Expand / collapse (level of detail):** double-click `layer 7` → its attention block to the left,
+   feed-forward to the right, two residual adds on the column, an outline around the layer.
+   Double-click `attention` → 8 KV groups on a ring; double-click `KV group 0` → 4 heads on a small ring.
+   Double-click `feed-forward` → 128 neuron buckets on a grid (> 48). **Collapse all** returns to 26 nodes.
+6. **Search + fly-to:** type `blk.3.ffn_down`, Enter → layer 3's FFN expands, the tensor is outlined and
+   the camera flies to it; everything else is dimmed. Type `layer.7.attn` → one match, camera flies to it.
+   **Focus** in the side panel flies to the selected node.
+7. **Marks shared with 2D:** cut `layer 6` (**Cut this**) → grey, shrunk, red outline; switch to 2D → the
+   same red outline. Uncut.
+8. **Edit marks:** side panel of `layer 7` → **Edit: zero** → orange outline in 3D and 2D, the header
+   button reads `Edits (1)` (orange). `undo` in the drawer removes the mark.
+9. **Color by:** removable / section / kind / quant / importance / damage / flow all recolor the instances
+   without rebuilding the view (camera does not move).
+10. **Token flow:** press **▶ token flow** (3D dataflow) with no journey yet → `tracing…`, then particles
+    run from Input up to Output in a loop (~4 s) and layers glow orange-red, most strongly the layers with
+    the largest push (see the journey's decision table). With layer 13 expanded, its attention and FFN
+    blocks glow separately. **■ stop flow** restores the colors. The button is disabled in 2D / tower / city / force.
+11. **Fallback to WebGL 2:** open `#/model/17d2889ccc34/graph?backend=webgl` (or Firefox without WebGPU, or
+    `chrome --disable-features=WebGPU` / `chrome://flags/#enable-unsafe-webgpu` disabled) → badge
+    **`WebGL 2`**, everything in steps 1–10 still works. Then run `nd web --host 0.0.0.0` and open
+    `http://<this machine's LAN IP>:7878/?token=…` from another device: the page is not a secure
+    context, the badge shows `WebGL 2` (WebGPU is off over plain HTTP), and the graph works.
+12. **No 3D at all:** a browser with WebGL disabled (`chrome --disable-gpu --disable-software-rasterizer
+    --disable-webgl`) shows the message "3D needs WebGPU or WebGL 2, and this browser provides neither…"
+    in the canvas, and the badge `no WebGPU / WebGL 2`; the side panel, cut selection and impact still work.
+
+**All test models:** repeat steps 1, 2, 4, 5, 6 and 10 on:
+- `qwen2.5:0.5b`: 24 layers; heads ring of 14 query heads (2 KV groups of 7). *record node count*.
+- `oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU`: hybrid layers; expanding an SSM layer puts the
+  `linear attention (SSM)` block on the left. Token flow: `token flow needs a trace: … unsupported for
+  architecture "qwen35"` toast (no forward pass). Embedding map works.
+- `nomic-embed-text`: 12 layers, Output (pooling); token flow uses residual-norm growth (embedding model).
+
+**Embedding map** (tokens page → **Load embedding map**):
+- `llama3.2:1b`: `128256 tokens · PCA explains …%` (*record*); first load computes the PCA
+  (*record seconds*), a reload is instant (`~/neurondump/cache/<digest>/embedmap-v1.bin` exists).
+  Badge shows the backend. Orbit, zoom; hover shows `"text" #id · class`; click inspects a token.
+- Class toggles hide classes (uncheck `reserved` → the 248 reserved tokens vanish).
+- Search `Sun` → matches enlarged in accent color and the camera flies to them.
+- After **Tokenize**, the prompt's tokens are enlarged and joined by a line in order.
+- Repeat on `qwen2.5:0.5b` (151,936 tokens), `oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU` and
+  `nomic-embed-text` (30,522 tokens, F16).
+
+```sh
+curl -s -D - -o /tmp/map.bin -H "x-neurondump-token: $T" $U/api/models/17d2889ccc34/embedding-map | grep -i x-neurondump
+python -c "import os;print(os.path.getsize('/tmp/map.bin'), 128256*16)"
+curl -s -H "x-neurondump-token: $T" "$U/api/models/17d2889ccc34/embedding-map?format=json"
+```
+
+**Expected:** `x-neurondump-count: 128256`, `x-neurondump-stride: 4`, an `x-neurondump-explained`
+triple; the file is `2052096` bytes (= 128256 × 16); the JSON has `"dim":2048,"sample":16384,"stride":4`.
+
+---
+
+## 15. Token inspector (Phase 15)
+
+**What to test:** tokenization with the template, per-token embedding information, the token journey
+(logit lens, attention heatmaps, FFN, decision breakdown), the generation timeline, CLI / REPL / API.
+
+```sh
+nd tokens llama3.2:1b "fn main() {"
+nd tokens llama3.2:1b "fn main() {" --chat
+nd tokens llama3.2:1b "fn main() {" --chat --system ""
+nd tokens qwen2.5:0.5b "fn main() {" --chat --system "You are a Rust expert."
+nd tokens nomic-embed-text "search_query: what is rust?"
+nd tokens oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU "Hello" --chat
+nd --json tokens llama3.2:1b "Hello" --neighbors 0 | python -m json.tool | head -30
+
+nd journey qwen2.5:0.5b --prompt "fn main() {"
+nd journey qwen2.5:0.5b --prompt "fn main() {" --token 2
+nd journey llama3.2:1b --prompt "The name of the star that Earth orbits is"
+nd journey nomic-embed-text --prompt "search_query: what is rust?"
+nd journey oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --prompt "Hi"        # unsupported
+nd journey llama3.2:1b --prompt "Hi" --token 99                         # out of range
+
+nd generate llama3.2:1b --prompt "The name of the star that Earth orbits is" --steps 8
+nd generate llama3.2:1b --prompt "The name of the star that Earth orbits is" --steps 8 --explain | tail -40
+nd generate llama3.2:1b --prompt "Once upon a time" --steps 12 --temperature 0.8 --top-p 0.9 --seed 1
+nd generate llama3.2:1b --prompt "Once upon a time" --steps 12 --temperature 0.8 --top-p 0.9 --seed 1   # identical (cached)
+```
+
+**Expected (tokens):**
+- Raw `"fn main() {"` on llama3.2: `<|begin_of_text|>` (special, `ADDED template`), then `fn`, ` main`,
+  `()`, ` {` (*record exact split*), class `code` / `word` / `punctuation`; `|EMB|` (*record*);
+  `PREDICTABLE yes`; 5 nearest tokens each (` main` → `main`, ` Main`, … *record*).
+- `--chat`: `chat template: ollama (system: none)` and the templated prompt starts with
+  `<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023` and ends with
+  `<|start_header_id|>assistant<|end_header_id|>\n\n`. Every token outside the user text is `template`.
+- qwen2.5 with a system prompt: `<|im_start|>system\nYou are a Rust expert.<|im_end|>\n<|im_start|>user\nfn main() {<|im_end|>\n<|im_start|>assistant\n`.
+- nomic: `[CLS]` … `[SEP]` added; `|OUT|` empty, `PREDICTABLE no` (no output head).
+- qwen3.5: no Ollama template → `chat template: builtin:chatml`.
+
+**Expected (journey on `qwen2.5:0.5b`, prompt `fn main() {`):**
+- The table has 24 layers. The **logit lens converges in the late layers**: early layers show unrelated
+  tokens with low P(target); the final prediction (a newline or indentation token, *record*) reaches
+  rank 0 only in the last layers (`target first top-1 at layer` ≥ 18, *record*) and its probability
+  climbs over the last few layers.
+- `ATTENDS TO` of the last token points at `{`, `main` and the first token (attention sink).
+- The decision breakdown lists `decision at position …: "<pred>" … vs runner-up "…"`, with
+  `logit diff` and `attributed` close but not equal (the attribution is exact f32, the logits come from
+  quantized matmuls; *record* the gap), the per-layer
+  bars largest in the late layers, and top heads / neurons.
+- `--token 2` inspects ` main` and shows `next token in the sequence: "("…` (*record*).
+- llama3.2 "The name of the star that Earth orbits is": final `" not" 0.166` (as in section 8); the
+  decision is " not" vs runner-up " the"; first top-1 at layer 15 (the lens is `" called"` at layer 14).
+- nomic: attention and FFN columns filled, logit lens empty, note "embedding model: there is no
+  next-token prediction…".
+- qwen3.5: `error: simulation unsupported for architecture "qwen35" …`.
+- `--token 99`: `token index 99 is out of range (the sequence has N tokens …)`.
+
+**Expected (generate):** greedy " not a fixed or constant name. It" (section 12's baseline text, first
+8 tokens); a table of 8 steps with P (0.166 for " not"), entropy (*record*) and the top
+alternative; `--explain` prints a decision block per step. The sampled run is reproducible with the
+same seed, and the second identical command prints `(cached result)`.
+
+**Web:**
+1. **tokens** page on `llama3.2:1b`: the text is prefilled; **Tokenize** shows chips (class-colored
+   borders; template tokens dimmed with **chat template** ticked), the templated prompt with the user
+   text highlighted, and the table. Click a chip → details with neighbours, **journey of this token**,
+   **show on map**, **ban**, **boost +5**, **embedding ×0** (the last three update the header `Edits (n)`).
+2. **journey** on `qwen2.5:0.5b` with `fn main() {`: the layer table, the attention heatmap
+   (layers × tokens; click a row → heads × tokens for that layer, top heads outlined in purple),
+   the decision breakdown with **zero** buttons. Click another token chip → its journey (cached when repeated).
+3. **Show path in the graph** → the graph opens with the contributing layers expanded and purple
+   outlines on them, their blocks and heads, in 3D and in 2D; **▶ token flow** animates that token.
+4. **timeline**: 12 step cards with probability and entropy bars; click step 3 → its decision
+   breakdown (a journey job with the generated tokens appended); tick **explain** → instant breakdowns.
+5. On qwen3.5 the journey and timeline pages show the "Runtime tracing does not support the "qwen35"
+   architecture" notice and the buttons are disabled; tokens still works.
+
+```sh
+H="x-neurondump-token: $T"; A=$U/api; M=7f1452142d64      # qwen2.5:0.5b
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"text":"fn main() {","chat":true,"neighbors":3}' $A/models/$M/tokenize \
+  | python -c "import json,sys;r=json.load(sys.stdin);print(r['chat']['source'],len(r['tokens']),[t['text'] for t in r['tokens'] if not t['added']])"
+J=$(curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"kind":"journey","model":"'$M'","params":{"prompt":"fn main() {","token":-1}}' $A/jobs | python -c "import json,sys;print(json.load(sys.stdin)['id'])")
+curl -sN -H "$H" "$A/jobs/$J/events" | grep -c "^event: progress"
+curl -s -H "$H" $A/jobs/$J/result | python -c "import json,sys;r=json.load(sys.stdin);print(len(r['layers']),r['first_top1'],r['first_top5'],r['decision']['chosen']['text'],round(r['decision']['logit_diff'],3),round(r['decision']['attributed'],3))"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"kind":"generate","model":"'$M'","params":{"prompt":"fn main() {","steps":6}}' $A/jobs
+```
+
+**Expected:** `ollama 5 ['fn', ' main', '()', ' {'…]` (*record*); the SSE stream has progress events;
+the result prints `24 <layer> <layer> <token> <x> <y>` with the logit difference and the attribution
+close but not equal (*record*; deepseek-r1 Q4_K_M showed 0.182 vs 0.048 on another prompt); the generate job returns `202 {"id":"generate-…"}`.
+
+---
+
+## 16. Live edits: change, compare, restore, bake (Phase 16)
+
+**What to test:** every edit type, compare (text, top-k, KL, perplexity, lens, decision), undo / redo /
+restore / toggle, snapshots, `edits.json`, bake → Ollama, and that ablation is part of the same stack.
+
+```sh
+cat > /tmp/zero7.json <<'EOF'
+{"schema_version":1,"edits":[{"id":1,"enabled":true,"op":"zero","target":"layer.7"}]}
+EOF
+cat > /tmp/steer.json <<'EOF'
+[{"op":"steer","layer":6,"a":"Dear Sir or Madam, I am writing to formally request your assistance.","b":"hey dude, just wanna ask u something lol","strength":4}]
+EOF
+cat > /tmp/off.json <<'EOF'
+{"schema_version":1,"edits":[{"id":1,"enabled":false,"op":"zero","target":"layer.7"}]}
+EOF
+nd edit llama3.2:1b --apply /tmp/zero7.json --prompt "The name of the star that Earth orbits is" --tokens 12
+nd edit llama3.2:1b --apply /tmp/off.json   --prompt "The name of the star that Earth orbits is" --tokens 12   # = baseline
+nd edit llama3.2:1b --apply /tmp/zero7.json --corpus /tmp/corpus5.txt --tokens 0 --prompt Hi | grep -E "^corpus"
+nd edit llama3.2:1b --apply /tmp/steer.json --prompt "Write a short note to my boss:" --tokens 24
+nd edit llama3.2:1b --apply /tmp/zero7.json --bake /tmp/llama-zero7.gguf --no-compare
+nd edit oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --apply /tmp/zero7.json        # compare unsupported, see error
+echo '[{"op":"scale","target":"layer.99","factor":2}]' > /tmp/bad.json && nd edit llama3.2:1b --apply /tmp/bad.json   # unknown node
+```
+
+**Expected:**
+- **zero layer 7:** the compare prints the same numbers as `ablate --cut layer.7` in section 12
+  (top-1 " not" 0.166 → " a" 0.157, KL 0.5473, the " a bit of a mystery, but I'll give you some" text), plus a
+  decision table showing which layers' push changed. The corpus line reads
+  `perplexity 7.554 -> 10.915, mean KL 0.2623` (same as the ablation).
+- **all edits off:** KL `0.0000`, top-1 unchanged, identical generated text on both sides
+  (that is the "undo → identical to baseline" check from the CLI).
+- **steering:** the edited side's continuation becomes more formal (*record both texts*); KL > 0.
+- **bake:** `baked llama3.2:1b -> /tmp/llama-zero7.gguf`, `size 1.23 GiB -> 1.23 GiB` (zeroing keeps
+  shapes), `applied: zero layer.7`, `tensors changed: 2` (attn_output, ffn_down of layer 7), `validate: OK (147 tensors)`, a
+  Modelfile next to it. Then:
+  ```sh
+  cd /tmp && ollama create llama-zero7 -f llama-zero7.Modelfile && ollama run llama-zero7 "What is the capital of Italy?" ; ollama rm llama-zero7
+  ```
+  The baked model runs in Ollama and answers the question (*record*; the in-memory run changes the
+  continuation, see above).
+- qwen3.5: the edit list prints, then `simulation unsupported for architecture "qwen35"`.
+- unknown node: `edit #1 (scale layer.99 x2): unknown node "layer.99"`, exit 1.
+
+**REPL** (`nd cli`, pick `llama3.2:1b`):
+
+```
+compare The name of the star that Earth orbits is --tokens 8
+edit zero layer.7
+compare --tokens 8
+undo
+compare --tokens 8
+redo
+toggle 1
+compare --tokens 8
+toggle 1
+edit ban " not"
+compare --tokens 8
+edit steer 6 "Dear Sir or Madam, I am writing to formally request your assistance." "hey dude, just wanna ask u something lol" 4
+generate Write a short note to my boss: --steps 20
+edits
+snapshot save formal
+restore
+edits
+compare --tokens 8
+snapshot load formal
+edits export /tmp/formal.json
+edit scale layer.7.attn.head.3 0
+edit scale layer.7.ffn.neuron.42 0
+edit embed Earth scale 0
+edit patch 9 "The capital of France is"
+edit sampling 0.8 40 0.9 1
+edit force 0 " the"
+edit system You are a pirate. Answer like one.
+compare --tokens 8
+journey -1
+bake /tmp/llama-formal.gguf
+web
+```
+
+**Expected:**
+1. The first `compare` (empty stack) shows identical sides, KL 0.
+2. `edit zero layer.7` prints `added edit #1` and the stack `#1 [on ] zero layer.7`, `changed nodes: layer.7`.
+   `compare` shows the layer-7 numbers above. **`undo` → the stack is empty and `compare` is identical
+   to the first one (KL 0, same text)**. `redo` brings #1 back; `toggle 1` switches it off (`[off]`) → identical again.
+3. `edit ban " not"` resolves the token (`ban token <id>`); `compare` shows " not" gone from the edited
+   top-k (probability 0) and a different continuation.
+4. `generate` after the steering edit runs with the stack (`[edited]` in the header line).
+5. `snapshot save formal` → `saved …/edits/<digest>/formal.json`; `restore` → empty stack; `compare`
+   identical to baseline; `snapshot load formal` → the stack is back; `edits export` writes the file.
+6. Every `edit …` line is accepted; `edit embed Earth scale 0` resolves `Earth` to one token (or
+   reports how many tokens it is); `compare` shows the edited prompt text with the pirate system prompt
+   (prompt edits switch both sides to chat format), the forced first token " the" and the sampling note.
+7. `bake` lists the skipped edits (`ban`, `patch`, `steer`, `force`: run-time only) and the notes
+   (sampling / system written to the Modelfile, tied embeddings changed by the embedding edit).
+8. `web` opens the UI on the same session: the **Edits** button shows the REPL's edits.
+
+**Web** (`llama3.2:1b`):
+1. Header **Edits** → drawer. Add `zero` `layer.7` → listed with a checkbox; header `Edits (1)` in orange;
+   graph outlines layer 7 in orange (3D and 2D).
+2. **Compare** with the prompt `The name of the star that Earth orbits is`, tokens 12 → baseline / edited side by side,
+   top-k, `KL 0.2…`, top-1 unchanged, the decision table, the logit lens diff (expandable).
+3. **↶ undo** → stack empty; **Compare** again → identical texts, KL `0.0000`.
+4. **↷ redo**, untick the checkbox (off) → compare identical; tick it again.
+5. Add a steering edit (defaults are the formal / casual prompts, layer 6, strength 4) → compare with
+   `Write a short note to my boss:` and 24 tokens → a more formal edited text.
+6. Tokens page → a token → **ban** → the drawer lists `ban token …`; compare shows it gone from the edited top-k.
+7. **restore all** → empty; **↶ undo** → everything back.
+8. Snapshot: type `formal`, save → appears in the load menu; restore all; load `formal` → back.
+9. **export edits.json** downloads `llama3.2_1b.edits.json`; **import** the same file → the same stack
+   (ids renumbered).
+10. Graph: cut `layer 6` → **Apply as edit** → `ablate layer.6` on the stack.
+11. **Bake** `edited.gguf` → progress, then `wrote …/bake/edited.gguf`, `validate: OK`, the
+    `ollama create edited -f "…edited.Modelfile"` command, and the skipped run-time edits.
+
+```sh
+M=17d2889ccc34; A=$U/api
+curl -s -H "$H" $A/models/$M/edits | python -c "import json,sys;v=json.load(sys.stdin);print(len(v['edits']),v['can_undo'])"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"op":"zero","target":"layer.7"}' $A/models/$M/edits | python -c "import json,sys;v=json.load(sys.stdin);print(v['active'],v['compiled']['touched'])"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"op":"scale","target":"nope","factor":2}' -o /dev/null -w "%{http_code}\n" $A/models/$M/edits
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"kind":"compare","model":"'$M'","params":{"prompt":"The name of the star that Earth orbits is","tokens":4}}' $A/jobs
+curl -s -H "$H" -X POST $A/models/$M/edits/1/toggle | python -c "import json,sys;print(json.load(sys.stdin)['edits'][0]['enabled'])"
+curl -s -H "$H" -X POST $A/models/$M/edits/undo | python -c "import json,sys;v=json.load(sys.stdin);print(v['changed'],v['edits'][0]['enabled'])"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"name":"t1"}' $A/models/$M/snapshots | python -c "import json,sys;print(json.load(sys.stdin)['snapshots'])"
+curl -s -H "$H" -X DELETE $A/models/$M/edits | python -c "import json,sys;print(len(json.load(sys.stdin)['edits']))"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"name":"t1","action":"load"}' $A/models/$M/snapshots | python -c "import json,sys;print(len(json.load(sys.stdin)['edits']))"
+curl -s -H "$H" "$A/models/$M/edits/export" -o /tmp/e.json && python -m json.tool /tmp/e.json | head -12
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"out":"../evil.gguf"}' -o /dev/null -w "%{http_code}\n" $A/models/$M/bake
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"out":"api-baked.gguf"}' $A/models/$M/bake
+curl -s -H "$H" -X POST $A/models/$M/edits/restore | python -c "import json,sys;print(len(json.load(sys.stdin)['edits']))"
+```
+
+**Expected:** `0 False` (fresh session), `1 ['layer.7']`, `400`, `202 {"id":"compare-…"}`, `False`,
+`True True`, `['t1']`, `0`, `1`, the edits.json with `schema_version`, `model`, `digest`, `edits`;
+`400` for `../evil.gguf`; `202 {"id":"bake-…"}` (file in `~/neurondump/bake/api-baked.gguf`); `0`.
+
+---
 ## Checklist
 
 ### 1. Discovery / parser / list / inspect
@@ -857,7 +1184,7 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://127.0.0.1:7878/a
 - [ ] plan/model mismatch and bad output names are rejected
 
 ### 8. Trace
-- [ ] llama3.2:1b: " Rome" in the logit lens from layer 11, final prediction " Rome" 0.84
+- [ ] llama3.2:1b: topic in the lens from layer 11 (" Earth"), " called" 0.39 at layer 14, final " not" 0.166
 - [ ] qwen2.5-coder next token matches llama.cpp
 - [ ] qwen3:8b trace runs
 - [ ] nomic: embedding contributions
@@ -912,41 +1239,71 @@ curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://127.0.0.1:7878/a
 - [ ] Sweep this level / Sweep heads of layer N → damage overlay + table → plan → Slim
 - [ ] every `curl` in section 13 returns the expected status and values
 
+### 14. 3D graph (wamr3d)
+- [ ] `scripts/vendor-wamr3d.sh` re-vendors 0.9.4 with no file changes
+- [ ] `.wasm` served as `application/wasm` (`curl -I`), `.js` as `text/javascript`
+- [ ] 2D / 3D toggle; 3D dataflow is the default; choice remembered; `?view=` works
+- [ ] llama3.2:1b: badge `WebGPU`; same page with `?backend=webgl` (or a browser without WebGPU) shows `WebGL 2` and works
+- [ ] `--host 0.0.0.0` from another device over HTTP → `WebGL 2`, graph works
+- [ ] no WebGPU / WebGL 2 → clear message in the canvas
+- [ ] dataflow layout: input at the bottom, layers up the column, output on top, side sections beside
+- [ ] expand / collapse down to heads, buckets (grid), experts; Collapse all
+- [ ] picking (instances and container outlines), hover tooltip, side panel
+- [ ] search highlights and flies to matches; Focus button flies to a node
+- [ ] cut / edited / token-path marks shared between 2D and 3D
+- [ ] color by works without moving the camera (incl. `flow`)
+- [ ] token flow: particles, layer glow by push, blocks glow separately when expanded, stop restores colors
+- [ ] all of the above on llama3.2:1b, qwen2.5:0.5b, oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU (token flow → unsupported toast), nomic-embed-text
+- [ ] embedding map on all four models: loads, cached on reload, class colors/toggles, search, click, prompt path
+- [ ] `/embedding-map` binary is count × 16 bytes; `?format=json` describes it
+
+### 15. Token inspector
+- [ ] `tokens` raw and `--chat` (templated prompt, template tokens marked), `--system ""` removes the system prompt
+- [ ] nearest neighbours, embedding / output norms, predictable flag; nomic has no output head
+- [ ] qwen3.5 without an Ollama template uses `builtin:chatml`
+- [ ] `journey` on qwen2.5:0.5b `fn main() {`: logit lens converges in the late layers
+- [ ] journey attention (per layer, per head heatmap), FFN buckets, decision breakdown (logit diff and attribution close; gap from quantized matmuls)
+- [ ] journey errors: unsupported architecture, index out of range; nomic shows the embedding note
+- [ ] `generate` greedy matches section 12's baseline text; sampling reproducible with a seed; `--explain`
+- [ ] web tokens page: chips, details, actions (journey / map / ban / boost / embedding ×0)
+- [ ] web journey: heatmaps, decision with zero buttons, Show path in the graph (2D + 3D) + token flow
+- [ ] web timeline: step cards, click a step → decision; explain
+- [ ] API: tokenize, journey job (SSE), generate job
+
+### 16. Live edits
+- [ ] zero a middle layer → change visible (same numbers as `ablate --cut layer.7`) → undo → output identical to baseline
+- [ ] all edits off → KL 0, identical text
+- [ ] steering example makes the continuation more formal
+- [ ] banning a token removes it from the edited top-k
+- [ ] scale head / neuron, embed, patch, sampling, force, system prompt edits all accepted and compared
+- [ ] toggle, redo, restore all (and undo after restore)
+- [ ] snapshot save / load (REPL, web, API); export / import edits.json
+- [ ] bake → validate OK → `ollama create` → `ollama run` works; run-time-only edits listed as skipped
+- [ ] bad edits refused (unknown node 400 / exit 1), bad bake names refused (400)
+- [ ] REPL edits visible in the web UI started with `web`
+- [ ] graph **Apply as edit** puts a cut on the stack; edited nodes outlined orange in 2D / 3D
+- [ ] edit drawer on every model page, `Edits (n)` badge
+
 ---
 
 ## Incomplete or stubbed features
 
-- **Structured pruning** (heads / FFN neurons / MoE experts) is *detected and scored* by `analyze`, and `slim`
-  still refuses to remove them: no architecture is confirmed to load non-uniform shapes. They can
-  now be *zeroed* in place through `ablate --save-plan` (same shapes, same size).
-- **Trace** covers llama, qwen2, qwen3, gemma/gemma2/gemma3, phi3, bert and nomic-bert only. Only
-  llama, qwen2 and nomic-bert were run here, because no gemma/phi/bert model is installed. No MoE or hybrid
-  (qwen35) forward pass, so router choices are never filled. gemma2 soft-capping is skipped.
-  Inference is CPU-only and loads all weights into RAM (8B Q4_K ≈ 5 GB).
-- **Dequantization** doesn't support IQ1_S/IQ1_M/IQ2_*/IQ3_*, TQ1_0/TQ2_0 or the legacy repacked
-  types. Their tensors are skipped in stats with a reason; trace falls back only where candle supports the type.
-- **Tokenizers**: BPE pre-tokenizers are exact for llama3 / qwen2 / gpt2. Others fall back to the
-  llama3 rules with a warning. SPM is implemented but untested here (no SPM model installed).
-  UGM/RWKV are not implemented (vocab trimming is unavailable for those).
-- **Ablation simulation** reuses the trace forward pass, so it covers the same architectures (no MoE,
-  no SSM/hybrid, so qwen35 cuts are static only; expert sweeps are refused). Generation has no KV
-  cache: every new token reruns the whole sequence, so tokens/s is only for comparing baseline and
-  ablated, and sweeps take minutes on CPU (16 layers × 5 texts ≈ 4 min for llama3.2:1b).
-  Memory is the same for both runs (in-memory masks). The reported "weights in use" is what a
-  slimmed file would hold.
-- **Zeroing** (blocks, heads, neurons, experts) keeps every shape, so files load in llama.cpp but
-  do not get smaller. Zeroing an expert does not change the router, which can still pick it.
-  Dropping the MTP / in-file vision tensors (`drop_tensors`) is not verified to load in llama.cpp.
-- **Graph importance** without measurements is structural only (required parts = 1, edge layers =
-  0.9, the rest unmeasured). Run `trace --corpus`, `inspect --stats` or `sweep` for real numbers.
-- The 3D views were checked here in headless Chrome on the WebGL 2 path (software rendering), not with
-  WebGPU on a real GPU. In a headless `--screenshot` run the canvas stays on "loading…", because the
-  screenshot is taken before the WebAssembly finishes loading. Check in a normal browser.
-- The DOT and Mermaid exports were checked for structure here, but Graphviz is not installed on
-  the test machine, so `dot -Tsvg` rendering is part of the manual test.
-- **Requantization** in slim only targets Q8_0, and it dequantizes a whole tensor in memory.
+The full list is in [docs/limitations.md](docs/limitations.md). In short:
+
+- **Phases 14–16 were only built (`cargo build`), not run:** no expected value marked *record* in
+  sections 14–16 has been measured, and the new 3D dataflow view, token flow, embedding map, token
+  inspector pages and edit UI have not been opened in a browser yet. The numbers that are given come
+  from code paths shared with sections 8 and 12 (same forward pass and masks).
+- **Runtime features** (trace, simulation, journey, timeline, live edits) cover llama, qwen2, qwen3,
+  gemma/gemma2/gemma3, phi3, bert and nomic-bert only; no MoE or hybrid (qwen35) forward pass, so MoE
+  routing and SSM state are never measured and expert edits are bake-only. CPU only, no KV cache.
+- **Bake** cannot store run-time-only edits (ban, boost, steering, patching, forced tokens); scaled
+  quantized tensors are re-encoded as Q8_0.
+- **Chat rendering** executes Ollama's Go templates (common subset) and built-in family templates; Jinja
+  templates are not executed.
+- **Structured pruning** (heads / FFN neurons / MoE experts) is detected and scored by `analyze`, and `slim`
+  still refuses to remove them; they can be zeroed in place (ablation plans, bake). Experimental.
+- **WebGPU** needs a secure context (`localhost` / HTTPS); remote plain-HTTP access uses WebGL 2.
+- **Dequantization** doesn't support IQ1_S/IQ1_M/IQ2_*/IQ3_*, TQ1_0/TQ2_0 or the legacy repacked types.
+- **Tokenizers**: BPE pre-tokenizers are exact for llama3 / qwen2 / gpt2; SPM untested; UGM/RWKV missing.
 - **No automated tests, fuzz target or criterion benches**, as requested. Clippy was not run.
-- The REPL `web` command can only start one server per session. The web watch mode checks the
-  manifest directories on each `/api/models` call instead of using OS file events.
-- `comfy-table` is built without terminal-width detection (Windows GNU toolchain workaround), so
-  wide tables do not wrap to the terminal.

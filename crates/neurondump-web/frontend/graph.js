@@ -1,14 +1,19 @@
 // Model graph view: interactive structure, node details, a cut selection with live static
-// impact, simulated ablation, sweeps and plan → slim. Drawn with wamr3d (graph3d.js): a flat
-// 2D diagram or a 3D tower, city or force layout.
+// impact, simulated ablation, sweeps, live edits and plan → slim. Two renderers, both on
+// wamr3d: the flat 2D diagram (graph3d.js, which also draws the tower / city / force
+// layouts) and the 3D dataflow view (flow3d.js) with the token flow animation. Node ids,
+// selection, cuts, edits and highlights are shared between them.
 
-import { api, qs } from './api.js';
+import { api, qs, runJob } from './api.js';
 import { el, bytes, count, esc, table, errorBox, toast, store } from './ui.js';
 import { jobWithProgress, planView } from './views.js';
-import { createGraph3D, MODES } from './graph3d.js';
+import { createGraph3D } from './graph3d.js';
+import { createFlow3D } from './flow3d.js';
+import { noGpuMessage } from './wamr.js';
+import { session, editedNodes, loadEdits, pushEdit } from './session.js';
 
 const LEVELS = ['section', 'layer', 'block', 'tensor'];
-const VIEWS = MODES;
+const LAYOUTS3D = { flow: 'dataflow', tower: 'tower', city: 'city', force: 'force' };
 const GROUPS = ['section', 'layer', 'block', 'quant', 'kind', 'importance'];
 const COLORS = ['removable', 'section', 'kind', 'quant', 'importance'];
 const PALETTE = ['#4e79a7', '#f28e2b', '#59a14f', '#e15759', '#76b7b2', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'];
@@ -27,6 +32,7 @@ function heat(score) {
 }
 
 export async function graph(id, params) {
+  const savedView = params?.get('view') || store.get('nd-graph-view') || '3d';
   const state = {
     level: params?.get('level') || store.get('nd-graph-level') || 'layer',
     groupBy: params?.get('group_by') || 'section',
@@ -37,22 +43,36 @@ export async function graph(id, params) {
     damage: null, // node id -> damage (sweep overlay)
     removed: new Set(),
     force: false,
-    render: VIEWS[params?.get('view')] ? params.get('view') : (VIEWS[store.get('nd-graph-view')] ? store.get('nd-graph-view') : 'tower'),
+    // '2d', or a 3D layout: flow (dataflow, default) / tower / city / force.
+    dim: savedView === '2d' ? '2d' : '3d',
+    layout3d: LAYOUTS3D[savedView] ? savedView : (LAYOUTS3D[store.get('nd-graph-layout3d')] ? store.get('nd-graph-layout3d') : 'flow'),
   };
+  const s = session(id);
+  if (params?.get('highlight') === '1') {
+    // Coming from a token journey: open the layers that hold the contributing nodes.
+    for (const h of s.highlight) { const m = /^layer\.(\d+)/.exec(h); if (m) state.expand.add(`layer.${m[1]}`); }
+  }
   const levelSel = selectEl(LEVELS, state.level, 'level');
   const groupSel = selectEl(GROUPS, state.groupBy, 'group by');
-  const colorSel = selectEl([...COLORS, 'damage'], state.color, 'color by');
-  const search = el('input', { type: 'search', placeholder: 'search nodes / tensors', size: 24 });
+  const colorSel = selectEl([...COLORS, 'damage', 'flow'], state.color, 'color by');
+  const search = el('input', { type: 'search', placeholder: 'search nodes / tensors (Enter flies to it)', size: 26 });
   const info = el('span', { class: 'muted' });
-  const viewSel = el('label', {}, 'view ', el('select', {}, Object.entries(VIEWS).map(([v, label]) => el('option', { value: v, selected: v === state.render }, label))));
-  const canvas3d = el('div', { class: 'graph-canvas graph-canvas3d' });
+  const backendBadge = el('span', { class: 'badge-backend', title: 'wamr3d renderer backend (auto: WebGPU, else WebGL 2)' }, '…');
+  const dimBtns = { '2d': el('button', { 'aria-checked': String(state.dim === '2d'), onclick: () => setDim('2d') }, '2D'), '3d': el('button', { 'aria-checked': String(state.dim === '3d'), onclick: () => setDim('3d') }, '3D') };
+  const layoutSel = el('select', {}, Object.entries(LAYOUTS3D).map(([v, label]) => el('option', { value: v, selected: v === state.layout3d }, label)));
+  const layoutLbl = el('label', { hidden: state.dim === '2d' }, '3D layout ', layoutSel);
+  const canvas2 = el('div', { class: 'graph-canvas graph-canvas3d' });
+  const canvasF = el('div', { class: 'graph-canvas graph-canvas3d' });
   const side = el('div', { class: 'graph-side' }, el('p', { class: 'muted' }, 'Click a node to see what it contains. Double-click to expand or collapse it.'));
   const selBox = el('div', { class: 'graph-selection' });
   const results = el('div', {});
-  let g3 = null; // 3D view, created on first render
-  let g3failed = false;
+  const flowBtn = el('button', { title: 'Animate the last token journey (or run one) along the dataflow; layers glow with their push on the prediction' }, '▶ token flow');
+  let g2 = null; let gf = null; let failed2 = false; let failedF = false;
 
-  // --- graph rendering --------------------------------------------------------------
+  const useFlow = () => state.dim === '3d' && state.layout3d === 'flow';
+  const cur = () => (useFlow() ? gf : g2);
+
+  // --- colors ---------------------------------------------------------------------------
   const sectionOf = (nid, byId) => {
     let n = byId.get(nid);
     while (n && n.parent && byId.has(n.parent)) n = byId.get(n.parent);
@@ -62,6 +82,22 @@ export async function graph(id, params) {
   const catColor = (key) => {
     if (!categorical.has(key)) categorical.set(key, PALETTE[categorical.size % PALETTE.length]);
     return categorical.get(key);
+  };
+  const flowValues = () => {
+    const j = s.journey;
+    const out = new Map();
+    if (!j) return out;
+    if (j.decision) {
+      const max = Math.max(1e-6, ...j.decision.layers.map((l) => Math.abs(l.attn) + Math.abs(l.ffn)));
+      const maxP = Math.max(1e-6, ...j.decision.layers.map((l) => Math.max(Math.abs(l.attn), Math.abs(l.ffn))));
+      for (const l of j.decision.layers) out.set(l.layer, { total: (Math.abs(l.attn) + Math.abs(l.ffn)) / max, attn: Math.abs(l.attn) / maxP, ffn: Math.abs(l.ffn) / maxP });
+    } else {
+      // Embedding models: growth of the residual stream per layer.
+      const d = j.layers.map((l, i) => Math.abs(l.residual_norm - (i ? j.layers[i - 1].residual_norm : 0)));
+      const max = Math.max(1e-6, ...d);
+      d.forEach((v, i) => out.set(i, { total: v / max, attn: v / max, ffn: v / max }));
+    }
+    return out;
   };
   function colorOf(n, byId) {
     switch (state.color) {
@@ -74,8 +110,68 @@ export async function graph(id, params) {
         const d = state.damage.get(n.id) ?? (n.layer != null ? state.damage.get(`layer.${n.layer}`) : undefined);
         return d === undefined ? '#dddddd' : heat(d);
       }
+      case 'flow': {
+        const v = n.layer != null ? flowValues().get(n.layer) : undefined;
+        if (!v) return '#dddddd';
+        return heat(n.block === 'attention' || n.block === 'ssm' ? v.attn : n.block === 'ffn' || n.block === 'moe' ? v.ffn : v.total);
+      }
       default: return REMOVABLE[n.removable] || '#cccccc';
     }
+  }
+  const colorFn = () => {
+    const byId = new Map(state.view.nodes.map((n) => [n.id, n]));
+    categorical.clear();
+    return (n) => colorOf(n, byId);
+  };
+
+  // Hidden ids (fine nodes of collapsed blocks, edits on tensors) map to the closest visible
+  // ancestor, so a mark is never lost.
+  const visible = (ids) => {
+    const have = new Set((state.view?.nodes || []).map((n) => n.id));
+    const out = new Set();
+    for (const x of ids) {
+      let c = x;
+      while (c && !have.has(c)) { const i = c.lastIndexOf('.'); c = i < 0 ? null : c.slice(0, i); }
+      if (c) out.add(c);
+    }
+    return out;
+  };
+  const marks = () => ({ cut: new Set(state.selection), removed: state.removed, edited: visible(editedNodes(id)), highlight: visible(s.highlight) });
+
+  // --- renderers --------------------------------------------------------------------------
+  async function ensure() {
+    const opts = { onTap: (nid) => showNode(nid), onDblTap: (nid) => toggleExpand(nid) };
+    if (useFlow()) {
+      if (!gf && !failedF) {
+        try { gf = await createFlow3D(canvasF, opts); } catch (e) { failedF = true; canvasF.replaceChildren(errorBox(new Error(noGpuMessage(e)))); }
+      }
+    } else if (!g2 && !failed2) {
+      try { g2 = await createGraph3D(canvas2, opts); } catch (e) { failed2 = true; canvas2.replaceChildren(errorBox(new Error(noGpuMessage(e)))); }
+    }
+    canvasF.hidden = !useFlow();
+    canvas2.hidden = useFlow();
+    const r = cur();
+    backendBadge.textContent = r ? r.backend : 'no WebGPU / WebGL 2';
+    backendBadge.classList.toggle('error', !r);
+    flowBtn.disabled = !useFlow();
+    return r;
+  }
+
+  async function render(refit = true) {
+    const v = state.view;
+    if (!v) return;
+    const r = await ensure();
+    if (!r) return;
+    if (!useFlow()) r.setMode(state.dim === '2d' ? '2d' : state.layout3d);
+    r.setData(v, colorFn(), refit);
+    r.setMarks(marks());
+  }
+
+  function recolor() {
+    const r = cur();
+    if (!r || !state.view) return;
+    r.recolor(colorFn());
+    r.setMarks(marks());
   }
 
   async function reload() {
@@ -83,43 +179,22 @@ export async function graph(id, params) {
     try {
       const v = await api(`/models/${id}/graph${qs({ level: state.level, group_by: state.groupBy, expand: [...state.expand].join(',') })}`);
       state.view = v;
-      categorical.clear();
       await render();
       info.textContent = `${v.nodes.length} nodes · ${v.edges.filter((e) => e.kind !== 'contains').length} connections${state.expand.size ? ` · expanded: ${[...state.expand].join(', ')}` : ''}`;
-      applySearch();
+      applySearch(false);
     } catch (e) {
       info.replaceChildren(errorBox(e));
     }
   }
 
-  async function ensure3d() {
-    if (g3 || g3failed) return g3;
-    try {
-      g3 = await createGraph3D(canvas3d, { onTap: (nid) => showNode(nid), onDblTap: (nid) => toggleExpand(nid) });
-    } catch (e) {
-      g3failed = true;
-      console.warn('3D graph unavailable', e);
-      canvas3d.replaceChildren(errorBox(new Error(`The graph needs WebGPU or WebGL 2, which this browser does not provide (${e.message || e}).`)));
-    }
-    return g3;
-  }
-  const color3d = () => {
-    const byId = new Map(state.view.nodes.map((n) => [n.id, n]));
-    categorical.clear();
-    return (n) => colorOf(n, byId);
-  };
-  async function render(refit = true) {
-    const v = state.view;
-    if (!v || !await ensure3d()) return;
-    g3.setMode(state.render);
-    g3.setData(v, color3d(), refit);
-    g3.setMarks({ cut: new Set(state.selection), removed: state.removed });
-  }
-
-  function recolor() {
-    if (!g3 || !state.view) return;
-    g3.recolor(color3d());
-    g3.setMarks({ cut: new Set(state.selection), removed: state.removed });
+  async function setDim(d) {
+    state.dim = d;
+    store.set('nd-graph-view', d === '2d' ? '2d' : state.layout3d);
+    dimBtns['2d'].setAttribute('aria-checked', String(d === '2d'));
+    dimBtns['3d'].setAttribute('aria-checked', String(d === '3d'));
+    layoutLbl.hidden = d === '2d';
+    if (!useFlow()) gf?.stopFlow();
+    await render();
   }
 
   function toggleExpand(nid) {
@@ -137,16 +212,21 @@ export async function graph(id, params) {
     reload();
   }
 
-  // --- search ------------------------------------------------------------------------
+  // --- search ------------------------------------------------------------------------------
   let tensorIndex = null;
-  async function applySearch() {
-    if (!g3) return;
+  async function applySearch(fly = true) {
+    const r = cur();
+    if (!r) return;
     const q = search.value.trim().toLowerCase();
-    if (!q) { g3.setMarks({ match: null }); return; }
+    if (!q) { r.setMarks({ match: null }); return; }
     const ids = (state.view?.nodes || []).filter((n) => n.id.toLowerCase().includes(q) || n.label.toLowerCase().includes(q)).map((n) => n.id);
-    if (ids.length) { g3.setMarks({ match: new Set(ids) }); g3.fit(ids); return; }
-    g3.setMarks({ match: null });
-    return expandToFind(q);
+    if (ids.length) {
+      r.setMarks({ match: new Set(ids) });
+      if (fly) { if (ids.length === 1 && r.focus) r.focus(ids[0]); else r.fit(ids); }
+      return;
+    }
+    r.setMarks({ match: null });
+    if (fly) return expandToFind(q);
   }
   async function expandToFind(q) {
     // Not visible at this level: look the name up at tensor level and expand its parents.
@@ -157,19 +237,41 @@ export async function graph(id, params) {
     for (const n of found) if (n.parent && !state.expand.has(n.parent)) { state.expand.add(n.parent); added = true; }
     if (added) reload(); else toast(`${found.length} match(es) are already visible`);
   }
-  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') applySearch(); });
+  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') applySearch(true); });
 
-  // --- node detail ---------------------------------------------------------------------
+  // --- token flow -----------------------------------------------------------------------------
+  flowBtn.addEventListener('click', async () => {
+    if (!gf) return;
+    if (gf.flowing) { gf.stopFlow(); flowBtn.textContent = '▶ token flow'; return; }
+    if (!s.journey) {
+      flowBtn.disabled = true; flowBtn.textContent = 'tracing…';
+      try {
+        const j = await runJob('journey', id, { prompt: s.prompt, chat: s.chat, token: -1 });
+        if (j.status !== 'done') throw new Error(j.error || j.status);
+        s.journey = await api(`/jobs/${j.id}/result`);
+      } catch (e) { toast(`token flow needs a trace: ${e.message}`); flowBtn.disabled = false; flowBtn.textContent = '▶ token flow'; return; }
+      flowBtn.disabled = false;
+    }
+    const tok = s.journey.tokens[s.journey.position];
+    gf.playFlow(flowValues(), tok?.text);
+    flowBtn.textContent = '■ stop flow';
+    toast(`token flow: "${esc(tok?.text ?? '')}" (from the last journey; change it on the journey page)`);
+  });
+
+  // --- node detail ---------------------------------------------------------------------------
+  const edit = (op, label) => el('button', { class: 'small', onclick: async () => { try { await pushEdit(id, op); toast(`edit added: ${label}`); } catch (e) { toast(e.message); } } }, label);
   async function showNode(nid) {
     side.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
     try {
       const d = await api(`/models/${id}/nodes/${encodeURIComponent(nid)}`);
       const n = d.node;
       const cut = state.selection.includes(n.id);
+      const scalable = ['layer', 'block', 'kv_group', 'head', 'neuron_bucket', 'expert'].includes(n.kind);
       const stats = n.stats ? Object.entries(n.stats).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => `${k} ${typeof v === 'number' ? v.toPrecision(4) : v}`).join(', ') : '';
+      const factor = el('input', { type: 'number', step: 'any', value: 0.5, style: 'width:4.5em' });
       side.replaceChildren(
         el('h3', {}, n.label),
-        el('div', { class: 'muted' }, `${n.kind} · `, el('code', {}, n.id)),
+        el('div', { class: 'muted' }, `${n.kind} · `, el('code', {}, n.id), editedNodes(id).has(n.id) ? el('span', { class: 'badge-edited' }, 'edited') : ''),
         el('p', {}, d.ancestors.slice().reverse().map((a) => el('a', { href: '#', onclick: (e) => { e.preventDefault(); showNode(a.id); } }, a.label)).flatMap((x) => [x, ' › ']), n.label),
         el('table', { class: 'kv' }, el('tbody', {},
           el('tr', {}, el('th', {}, 'size'), el('td', {}, `${count(n.params)} params · ${bytes(n.bytes)}`)),
@@ -183,7 +285,13 @@ export async function graph(id, params) {
         el('div', { class: 'row' },
           el('button', { class: cut ? '' : 'primary', onclick: () => { toggleCut(n.id); showNode(n.id); } }, cut ? 'Uncut' : 'Cut this'),
           (n.lazy || d.children.length) ? el('button', { onclick: () => toggleExpand(n.id) }, state.expand.has(n.id) ? 'Collapse' : 'Expand') : '',
+          el('button', { title: 'Fly the camera to this node', onclick: () => { const r = cur(); if (r?.focus) r.focus(n.id); else r?.fit([n.id]); } }, 'Focus'),
           (n.kind === 'block' && n.block === 'attention') ? el('button', { onclick: () => runSweep('head', n.layer) }, `Sweep heads of layer ${n.layer}`) : ''),
+        el('div', { class: 'row edit-quick' }, el('strong', {}, 'Edit:'),
+          edit({ op: 'zero', target: n.id }, 'zero'),
+          scalable ? [edit({ op: 'scale', target: n.id, factor: 0.5 }, '×0.5'), edit({ op: 'scale', target: n.id, factor: 2 }, '×2'),
+            factor, el('button', { class: 'small', onclick: () => pushEdit(id, { op: 'scale', target: n.id, factor: Number(factor.value) }).then(() => toast('edit added')).catch((e) => toast(e.message)) }, 'scale')] : '',
+          n.kind === 'layer' ? edit({ op: 'skip', layer: n.layer }, 'skip layer') : ''),
         d.children.length ? el('div', {}, el('h4', {}, `Contains (${d.children.length})`), table([
           { label: 'child', get: (c) => el('a', { href: '#', onclick: (e) => { e.preventDefault(); showNode(c.id); } }, c.label) },
           { label: 'kind', get: (c) => c.kind },
@@ -196,14 +304,14 @@ export async function graph(id, params) {
           el('ul', { class: 'plain' },
             d.incoming.map((e) => el('li', {}, '← ', el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); showNode(e.from); } }, e.from), ` (${e.kind}${e.label ? ': ' + e.label : ''})`)),
             d.outgoing.map((e) => el('li', {}, '→ ', el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); showNode(e.to); } }, e.to), ` (${e.kind}${e.label ? ': ' + e.label : ''})`)))) : '');
-      g3?.setMarks({ selected: n.id });
+      cur()?.setMarks({ selected: [...visible([n.id])][0] ?? n.id });
     } catch (e) {
       side.replaceChildren(errorBox(e));
     }
   }
 
   // --- selection + static impact -------------------------------------------------------
-  const promptIn = el('input', { size: 40, value: 'The capital of Italy is' });
+  const promptIn = el('input', { size: 40, value: s.prompt });
   const tokensIn = el('input', { type: 'number', min: 0, max: 64, value: 12, style: 'width:5em' });
   const corpusIn = el('textarea', { rows: 4, placeholder: 'Corpus for perplexity and sweeps (texts separated by blank lines)' }, SAMPLE_CORPUS);
   const forceIn = el('input', { type: 'checkbox', onchange: () => { state.force = forceIn.checked; renderSelection(); } });
@@ -220,7 +328,7 @@ export async function graph(id, params) {
 
   async function renderSelection() {
     const seq = ++impactSeq;
-    const list = el('ul', { class: 'plain' }, state.selection.map((s) => el('li', {}, el('code', {}, s), ' ', el('button', { onclick: () => toggleCut(s) }, '×'))));
+    const list = el('ul', { class: 'plain' }, state.selection.map((x) => el('li', {}, el('code', {}, x), ' ', el('button', { onclick: () => toggleCut(x) }, '×'))));
     const impactBox = el('div', {});
     selBox.replaceChildren(
       el('h3', {}, `Cut selection (${state.selection.length})`),
@@ -250,6 +358,7 @@ export async function graph(id, params) {
         corpusIn,
         el('div', { class: 'row' },
           el('button', { class: 'primary', disabled: !i.simulation_supported || i.refused, title: i.simulation_supported ? '' : i.simulation_notes.join('; '), onclick: simulate }, 'Simulate'),
+          el('button', { title: 'Put this cut on the edit stack (undo / toggle / restore like any edit)', onclick: () => pushEdit(id, { op: 'ablate', cut: state.selection }).then(() => toast('cut added to the edit stack')).catch((e) => toast(e.message)) }, 'Apply as edit'),
           el('button', { onclick: () => runSweep('layer') }, 'Sweep this level (layers)'),
           el('button', { disabled: i.refused, onclick: savePlan }, 'Save as plan → Slim')));
     } catch (e) {
@@ -257,7 +366,7 @@ export async function graph(id, params) {
     }
   }
 
-  const corpusTexts = () => corpusIn.value.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const corpusTexts = () => corpusIn.value.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
 
   async function simulate() {
     results.replaceChildren();
@@ -297,12 +406,12 @@ export async function graph(id, params) {
   }
 
   function ablationView(r) {
-    const s = r.simulation;
-    if (!s) return el('p', {}, 'static impact only');
+    const sim = r.simulation;
+    if (!sim) return el('p', {}, 'static impact only');
     const tk = (v) => v.map((t) => `"${esc(t.text)}" ${t.prob.toFixed(3)}`).join('  ');
     return el('div', {},
-      el('h3', {}, `Simulated: ${s.cut.join(', ')} (${s.elapsed_ms} ms, nothing written)`),
-      s.prompts.map((p) => el('div', {},
+      el('h3', {}, `Simulated: ${sim.cut.join(', ')} (${sim.elapsed_ms} ms, nothing written)`),
+      sim.prompts.map((p) => el('div', {},
         el('p', {}, el('strong', {}, `"${esc(p.prompt)}"`), ` · ${p.n_tokens} tokens · KL ${p.kl?.toFixed(4) ?? '-'} nats · top-1 ${p.top1_changed ? 'CHANGED' : 'unchanged'}`, p.embedding_cosine != null ? ` · embedding cosine ${p.embedding_cosine.toFixed(4)}` : ''),
         table([{ label: '', get: (x) => x[0] }, { label: 'baseline', get: (x) => x[1] }, { label: 'ablated', get: (x) => x[2] }], [
           ['top-k', tk(p.baseline.top_k), tk(p.ablated.top_k)],
@@ -315,9 +424,9 @@ export async function graph(id, params) {
           { label: 'ablated', get: (l) => l.ablated ? `"${esc(l.ablated.text)}" ${l.ablated.prob.toFixed(2)}` : '' },
           { label: 'P(target) base → ablated', get: (l) => `${l.baseline_target_prob.toFixed(3)} → ${l.ablated_target_prob.toFixed(3)}` },
         ], p.lens)) : '')),
-      s.corpus ? el('p', {}, `corpus: ${s.corpus.samples} sample(s), ${s.corpus.tokens} positions · perplexity ${s.corpus.baseline_ppl?.toFixed(3) ?? '-'} → ${s.corpus.ablated_ppl?.toFixed(3) ?? '-'} · mean KL ${s.corpus.mean_kl?.toFixed(4) ?? '-'} · top-1 agreement ${(s.corpus.top1_agreement * 100).toFixed(1)}%`) : '',
-      el('p', {}, `weights in use: ${bytes(s.weights_bytes_baseline)} → ${bytes(s.weights_bytes_ablated)}`),
-      s.warnings.map((w) => el('p', { class: 'muted' }, w)),
+      sim.corpus ? el('p', {}, `corpus: ${sim.corpus.samples} sample(s), ${sim.corpus.tokens} positions · perplexity ${sim.corpus.baseline_ppl?.toFixed(3) ?? '-'} → ${sim.corpus.ablated_ppl?.toFixed(3) ?? '-'} · mean KL ${sim.corpus.mean_kl?.toFixed(4) ?? '-'} · top-1 agreement ${(sim.corpus.top1_agreement * 100).toFixed(1)}%`) : '',
+      el('p', {}, `weights in use: ${bytes(sim.weights_bytes_baseline)} → ${bytes(sim.weights_bytes_ablated)}`),
+      sim.warnings.map((w) => el('p', { class: 'muted' }, w)),
       el('button', { onclick: () => savePlan() }, 'Save this cut as plan → Slim'));
   }
 
@@ -344,25 +453,38 @@ export async function graph(id, params) {
   // --- controls ------------------------------------------------------------------------
   levelSel.querySelector('select').addEventListener('change', (e) => { state.level = e.target.value; store.set('nd-graph-level', state.level); reload(); });
   groupSel.querySelector('select').addEventListener('change', (e) => { state.groupBy = e.target.value; reload(); });
-  viewSel.querySelector('select').addEventListener('change', (e) => { state.render = e.target.value; store.set('nd-graph-view', state.render); render(); });
+  layoutSel.addEventListener('change', () => { state.layout3d = layoutSel.value; store.set('nd-graph-layout3d', state.layout3d); setDim('3d'); });
   colorSel.querySelector('select').addEventListener('change', (e) => { state.color = e.target.value; store.set('nd-graph-color', state.color); recolor(); });
   const zoomCtl = el('span', { class: 'zoom-ctl' },
-    el('button', { title: 'Zoom out', onclick: () => g3?.zoomBy(1 / 1.25) }, '−'),
-    el('button', { title: 'Zoom in', onclick: () => g3?.zoomBy(1.25) }, '+'),
-    el('button', { title: 'Reset zoom to the whole model', onclick: () => g3?.resetZoom() }, '100%'),
-    el('button', { title: 'Fit graph to view', onclick: () => g3?.fit() }, 'Fit'));
+    el('button', { title: 'Zoom out', onclick: () => cur()?.zoomBy(1 / 1.25) }, '−'),
+    el('button', { title: 'Zoom in', onclick: () => cur()?.zoomBy(1.25) }, '+'),
+    el('button', { title: 'Reset zoom to the whole model', onclick: () => cur()?.resetZoom() }, '100%'),
+    el('button', { title: 'Fit graph to view', onclick: () => cur()?.fit() }, 'Fit'));
   const legend = el('span', { class: 'muted small' }, 'removable: ',
-    ...Object.entries(REMOVABLE).flatMap(([k, c]) => [el('span', { class: 'swatch', style: `background:${c}` }), k + ' ']));
+    ...Object.entries(REMOVABLE).flatMap(([k, c]) => [el('span', { class: 'swatch', style: `background:${c}` }), k + ' ']),
+    el('span', { class: 'swatch', style: 'background:#f28e2b' }), 'edited ', el('span', { class: 'swatch', style: 'background:#8e44ad' }), 'token path');
+  const clearHl = el('button', { title: 'Remove the token-journey highlight', onclick: () => { s.highlight = new Set(); cur()?.setMarks(marks()); } }, 'clear path');
+
+  const onEdits = (e) => { if (e.detail.model === id) cur()?.setMarks(marks()); };
+  const onHl = (e) => { if (e.detail.model === id) cur()?.setMarks(marks()); };
+  window.addEventListener('nd-edits', onEdits);
+  window.addEventListener('nd-highlight', onHl);
 
   const node = el('section', { class: 'graph-view' },
-    el('div', { class: 'row' }, el('h2', {}, 'Graph'), viewSel, levelSel, groupSel, colorSel, search, zoomCtl,
-      el('button', { onclick: () => { state.expand.clear(); reload(); } }, 'Collapse all'), legend),
+    el('div', { class: 'row' }, el('h2', {}, 'Graph'), el('span', { class: 'segmented', role: 'radiogroup' }, dimBtns['2d'], dimBtns['3d']), layoutLbl, backendBadge,
+      levelSel, groupSel, colorSel, search, zoomCtl, flowBtn,
+      el('button', { onclick: () => { state.expand.clear(); reload(); } }, 'Collapse all'), clearHl, legend),
     info,
-    el('div', { class: 'graph-main' }, canvas3d, side),
+    el('div', { class: 'graph-main' }, el('div', { class: 'graph-canvases' }, canvas2, canvasF), side),
     selBox,
     results);
-  node.cleanup = () => { g3?.dispose(); g3 = null; };
+  node.cleanup = () => {
+    window.removeEventListener('nd-edits', onEdits);
+    window.removeEventListener('nd-highlight', onHl);
+    g2?.dispose(); gf?.dispose(); g2 = null; gf = null;
+  };
   renderSelection();
+  loadEdits(id).catch(() => {});
   // Render after the node is attached so the canvas can measure its container.
   setTimeout(reload, 0);
   return node;

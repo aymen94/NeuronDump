@@ -14,10 +14,11 @@ use candle_core::quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul};
 use candle_core::{Device, Module, Tensor, D};
 
 use neurondump_core::model::ModelHandle;
-use neurondump_core::tokenizer::{Encoder, Vocab};
+use neurondump_core::tokenizer::{Encoder, TokenType, Vocab};
 use neurondump_core::trace::{
-    Ablation, CorpusEval, LayerTrace, LensDiff, LensToken, SimPrompt, SimReport, SimRequest, SimSide, SweepEntry, SweepReport, SweepRequest,
-    TokenContribution, TraceBackend, TraceReport, TraceRequest,
+    Ablation, CorpusEval, Decision, GenStep, GenerateReport, GenerateRequest, HeadAttribution, JourneyLayer, JourneyReport, JourneyRequest, JourneyToken,
+    LayerAttribution, LayerTrace, LensDiff, LensToken, NeuronAttribution, Sampling, SimPrompt, SimReport, SimRequest, SimSide, SweepEntry, SweepReport,
+    SweepRequest, TokenContribution, TraceBackend, TraceReport, TraceRequest,
 };
 use neurondump_core::util::{check_cancel, Progress, SCHEMA_VERSION};
 use neurondump_gguf::{GgmlType, GgufFile, TensorInfo};
@@ -273,35 +274,96 @@ struct Model<'a> {
     top_k: usize,
 }
 
-/// Per-pass ablation masks (built from a core [`Ablation`]).
+/// Per-pass intervention masks (built from a core [`Ablation`]; steering and patching
+/// vectors are computed by [`Model::masks`]).
 #[derive(Default)]
 struct Masks {
     skip: HashSet<usize>,
     zero_attn: HashSet<usize>,
     zero_ffn: HashSet<usize>,
-    heads: HashMap<usize, Vec<usize>>,
-    neurons: HashMap<usize, Vec<(usize, usize)>>,
+    /// Factor of the mixer / FFN contribution (layer and block scales multiplied).
+    attn_scale: HashMap<usize, f32>,
+    ffn_scale: HashMap<usize, f32>,
+    /// (head, factor); 0 zeroes the head.
+    heads: HashMap<usize, Vec<(usize, f32)>>,
+    /// (first, last, factor) inclusive neuron ranges.
+    neurons: HashMap<usize, Vec<(usize, usize, f32)>>,
     zero_tensors: Vec<String>,
     tokens: Vec<(u32, u32)>,
+    bias: Vec<(u32, f32)>,
+    /// token -> (scale, replacement token).
+    embed: HashMap<u32, (f32, Option<u32>)>,
+    /// Vector added to the residual stream after the layer, [1, n_embd].
+    steer: HashMap<usize, Tensor>,
+    /// Source residual rows after the layer, and whether every position is patched.
+    patch_h: HashMap<usize, (Vec<Vec<f32>>, bool)>,
+    /// (head, source attention output rows before the projection, all positions).
+    patch_z: HashMap<usize, Vec<(usize, Vec<Vec<f32>>, bool)>>,
 }
 
 impl Masks {
     fn from(a: &Ablation) -> Self {
-        let mut m = Masks { zero_tensors: a.zero_tensors.clone(), tokens: a.mask_tokens.clone(), ..Default::default() };
+        let mut m = Masks { zero_tensors: a.zero_tensors.clone(), tokens: a.mask_tokens.clone(), bias: a.logit_bias.clone(), ..Default::default() };
         m.skip.extend(a.skip_layers.iter().map(|&l| l as usize));
+        let is_mixer = |b: &str| matches!(b, "attention" | "ssm");
         for (l, b) in &a.zero_blocks {
-            match b.as_str() {
-                "attention" | "ssm" => m.zero_attn.insert(*l as usize),
-                _ => m.zero_ffn.insert(*l as usize),
-            };
+            if is_mixer(b) {
+                m.zero_attn.insert(*l as usize);
+            } else {
+                m.zero_ffn.insert(*l as usize);
+            }
+        }
+        for (l, f) in &a.scale_layers {
+            *m.attn_scale.entry(*l as usize).or_insert(1.0) *= f;
+            *m.ffn_scale.entry(*l as usize).or_insert(1.0) *= f;
+        }
+        for (l, b, f) in &a.scale_blocks {
+            let map = if is_mixer(b) { &mut m.attn_scale } else { &mut m.ffn_scale };
+            *map.entry(*l as usize).or_insert(1.0) *= f;
+        }
+        for (l, f) in m.attn_scale.clone() {
+            if f == 0.0 {
+                m.zero_attn.insert(l);
+            }
+        }
+        for (l, f) in m.ffn_scale.clone() {
+            if f == 0.0 {
+                m.zero_ffn.insert(l);
+            }
         }
         for (l, h) in &a.zero_heads {
-            m.heads.entry(*l as usize).or_default().push(*h as usize);
+            m.heads.entry(*l as usize).or_default().push((*h as usize, 0.0));
+        }
+        for (l, h, f) in &a.scale_heads {
+            m.heads.entry(*l as usize).or_default().push((*h as usize, *f));
         }
         for (l, s, e) in &a.zero_neurons {
-            m.neurons.entry(*l as usize).or_default().push((*s as usize, *e as usize));
+            m.neurons.entry(*l as usize).or_default().push((*s as usize, *e as usize, 0.0));
+        }
+        for (l, s, e, f) in &a.scale_neurons {
+            m.neurons.entry(*l as usize).or_default().push((*s as usize, *e as usize, *f));
+        }
+        for e in &a.embed_edits {
+            let entry = m.embed.entry(e.token).or_insert((1.0, None));
+            entry.0 *= e.scale.unwrap_or(1.0);
+            if e.replace_with.is_some() {
+                entry.1 = e.replace_with;
+            }
         }
         m
+    }
+
+    fn factor(map: &HashMap<usize, f32>, l: usize) -> f32 {
+        map.get(&l).copied().unwrap_or(1.0)
+    }
+
+    fn apply_logits(&self, logits: &mut [f32]) {
+        for (t, b) in &self.bias {
+            if let Some(x) = logits.get_mut(*t as usize) {
+                *x += b;
+            }
+        }
+        mask_logits(logits, &self.tokens);
     }
 }
 
@@ -313,15 +375,53 @@ struct FwdOpt {
     lens_probs: bool,
     /// Logits for every position (perplexity, KL), as [seq, vocab].
     all_logits: bool,
+    /// Record everything about this position (journey, decision breakdown).
+    record: Option<usize>,
+    /// Keep every layer's residual rows and attention outputs (steering / patching sources).
+    keep: bool,
+}
+
+/// One layer at the recorded position.
+#[derive(Default, Clone)]
+struct LayerRec {
+    /// [head][key 0..=pos].
+    attn: Vec<Vec<f32>>,
+    /// Attention output before the projection (n_head * head_dim), head factors applied.
+    z: Vec<f32>,
+    /// What the mixer added to the residual stream.
+    attn_out: Vec<f32>,
+    /// RMS of the projection output before a post-attention norm.
+    attn_pre_rms: Option<f32>,
+    attn_factor: f32,
+    /// FFN activations (after the gate), neuron factors applied.
+    inner: Vec<f32>,
+    ffn_out: Vec<f32>,
+    ffn_pre_rms: Option<f32>,
+    ffn_factor: f32,
+    /// Residual stream after the layer.
+    h: Vec<f32>,
+    skipped: bool,
+}
+
+#[derive(Default, Clone)]
+struct Record {
+    pos: usize,
+    /// Residual stream before layer 0.
+    emb: Vec<f32>,
+    layers: Vec<LayerRec>,
 }
 
 struct FwdOut {
     sample: Sample,
-    /// Next-token logits at the last position (token mask applied).
+    /// Next-token logits at the last position (token mask and bias applied).
     last_logits: Vec<f32>,
     all_logits: Option<Tensor>,
     lens_probs: Vec<Vec<f32>>,
     pooled: Option<Vec<f32>>,
+    record: Option<Record>,
+    /// With `keep`: residual rows after every layer, and attention outputs before the projection.
+    hidden: Vec<Vec<Vec<f32>>>,
+    zs: Vec<Vec<Vec<f32>>>,
 }
 
 fn mask_logits(logits: &mut [f32], tokens: &[(u32, u32)]) {
@@ -331,6 +431,77 @@ fn mask_logits(logits: &mut [f32], tokens: &[(u32, u32)]) {
             logits[a..b].fill(f32::NEG_INFINITY);
         }
     }
+}
+
+fn row_of(t: &Tensor, i: usize) -> Result<Vec<f32>> {
+    Ok(t.narrow(0, i, 1)?.squeeze(0)?.to_vec1::<f32>()?)
+}
+
+fn rms(v: &[f32], eps: f64) -> f32 {
+    ((v.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / v.len().max(1) as f64) + eps).sqrt() as f32
+}
+
+/// Replaces rows of `x` [seq, dim] with source rows aligned from the end.
+fn patch_rows(x: &Tensor, src: &[Vec<f32>], all: bool, cols: Option<(usize, usize)>) -> Result<Tensor> {
+    let mut v = x.to_vec2::<f32>()?;
+    let (seq, ns) = (v.len(), src.len());
+    let n = if all { seq.min(ns) } else { 1.min(seq.min(ns)) };
+    for k in 0..n {
+        let (t, s) = (seq - 1 - k, ns - 1 - k);
+        match cols {
+            Some((a, b)) => v[t][a..b].copy_from_slice(&src[s][a..b]),
+            None => v[t].copy_from_slice(&src[s]),
+        }
+    }
+    let dim = v.first().map_or(0, Vec::len);
+    Ok(Tensor::from_vec(v.concat(), (seq, dim), x.device())?)
+}
+
+/// xorshift64* for reproducible sampling.
+fn next_rand(state: &mut u64) -> f64 {
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// Picks a token from logits (edits applied) with the sampling settings.
+fn sample_token(logits: &[f32], s: &Sampling, rng: &mut u64) -> usize {
+    if s.is_greedy() {
+        return argmax(logits);
+    }
+    let scaled: Vec<f32> = logits.iter().map(|x| x / s.temperature.max(1e-4)).collect();
+    let lp = log_softmax(&scaled);
+    let mut idx: Vec<usize> = (0..lp.len()).filter(|i| lp[*i].is_finite()).collect();
+    idx.sort_by(|a, b| lp[*b].partial_cmp(&lp[*a]).unwrap_or(std::cmp::Ordering::Equal));
+    if let Some(k) = s.top_k.filter(|k| *k > 0) {
+        idx.truncate(k);
+    }
+    if let Some(p) = s.top_p.filter(|p| *p > 0.0 && *p < 1.0) {
+        let mut cum = 0.0;
+        let mut keep = 0;
+        for &i in &idx {
+            cum += lp[i].exp();
+            keep += 1;
+            if cum >= p as f64 {
+                break;
+            }
+        }
+        idx.truncate(keep.max(1));
+    }
+    let total: f64 = idx.iter().map(|&i| lp[i].exp()).sum();
+    let mut r = next_rand(rng) * total;
+    for &i in &idx {
+        r -= lp[i].exp();
+        if r <= 0.0 {
+            return i;
+        }
+    }
+    idx.first().copied().unwrap_or(0)
+}
+
+fn entropy(lp: &[f64]) -> f32 {
+    -lp.iter().filter(|x| x.is_finite()).map(|x| x.exp() * x).sum::<f64>() as f32
 }
 
 /// log-softmax in f64 (stable).
@@ -533,14 +704,14 @@ impl<'a> Model<'a> {
     }
 
     fn lens(&self, h_last: &Tensor) -> Result<Vec<LensToken>> {
-        Ok(self.lens_full(h_last, &[])?.0)
+        Ok(self.lens_full(h_last, &Masks::default())?.0)
     }
 
     /// Top-k of the logit lens plus the full distribution (token mask applied).
-    fn lens_full(&self, h_last: &Tensor, mask: &[(u32, u32)]) -> Result<(Vec<LensToken>, Vec<f32>)> {
+    fn lens_full(&self, h_last: &Tensor, masks: &Masks) -> Result<(Vec<LensToken>, Vec<f32>)> {
         let Some(logits) = self.head_logits(h_last)? else { return Ok((vec![], vec![])) };
         let mut l = logits.squeeze(0)?.to_vec1::<f32>()?;
-        mask_logits(&mut l, mask);
+        masks.apply_logits(&mut l);
         let lp = log_softmax(&l);
         let probs: Vec<f32> = lp.iter().map(|x| x.exp() as f32).collect();
         Ok((self.top_tokens(&probs), probs))
@@ -561,10 +732,33 @@ impl<'a> Model<'a> {
         Ok(self.run(ids, &Masks::default(), FwdOpt { measure: true, ..Default::default() }, p)?.sample)
     }
 
+    /// Input embeddings for `ids`, with embedding edits applied.
+    fn embed(&self, ids: &[u32], masks: &Masks) -> Result<Tensor> {
+        let h = self.w.rows("token_embd.weight", ids)?;
+        if masks.embed.is_empty() || !ids.iter().any(|i| masks.embed.contains_key(i)) {
+            return Ok(h);
+        }
+        let mut v = h.to_vec2::<f32>()?;
+        for (i, id) in ids.iter().enumerate() {
+            let Some((scale, repl)) = masks.embed.get(id) else { continue };
+            if let Some(r) = repl {
+                v[i] = row_of(&self.w.rows("token_embd.weight", &[*r])?, 0)?;
+            }
+            for x in &mut v[i] {
+                *x *= scale;
+            }
+        }
+        Ok(Tensor::from_vec(v.concat(), (ids.len(), self.n_embd_rows()), &self.w.dev)?)
+    }
+
+    fn n_embd_rows(&self) -> usize {
+        self.w.info("token_embd.weight").map_or(self.n_embd, |t| t.row_len() as usize)
+    }
+
     fn run(&self, ids: &[u32], masks: &Masks, opt: FwdOpt, p: &dyn Progress) -> Result<FwdOut> {
         let _zero = ZeroGuard::new(&masks.zero_tensors);
         let seq = ids.len();
-        let mut h = self.w.rows("token_embd.weight", ids)?;
+        let mut h = self.embed(ids, masks)?;
         if is_zeroed("token_embd.weight") {
             h = h.zeros_like()?;
         }
@@ -581,6 +775,11 @@ impl<'a> Model<'a> {
         if let Some(n) = &self.embd_norm {
             h = n.forward(&h)?;
         }
+        let rpos = opt.record.map(|r| r.min(seq - 1));
+        let mut record = rpos.map(|pos| Record { pos, emb: Vec::new(), layers: Vec::new() });
+        if let (Some(r), Some(pos)) = (record.as_mut(), rpos) {
+            r.emb = row_of(&h, pos)?;
+        }
         let (cos, sin) = self.rope_tables(seq)?;
         let causal = !self.spec.encoder;
         let mask = if causal && seq > 1 {
@@ -593,10 +792,12 @@ impl<'a> Model<'a> {
         let mut traces = Vec::new();
         let mut neuron_means = Vec::new();
         let mut lens_probs = Vec::new();
+        let mut hidden = Vec::new();
+        let mut zs = Vec::new();
         let n_layers = self.layers.len();
         let measure_lens = |h: &Tensor, lens_probs: &mut Vec<Vec<f32>>| -> Result<Vec<LensToken>> {
             if opt.lens_probs {
-                let (top, probs) = self.lens_full(&h.narrow(0, seq - 1, 1)?, &masks.tokens)?;
+                let (top, probs) = self.lens_full(&h.narrow(0, seq - 1, 1)?, masks)?;
                 lens_probs.push(probs);
                 Ok(top)
             } else {
@@ -608,8 +809,13 @@ impl<'a> Model<'a> {
             if opt.measure {
                 p.set(50.0 + 45.0 * li as f32 / n_layers as f32, &format!("layer {li}"));
             }
+            let mut rec = LayerRec { attn_factor: Masks::factor(&masks.attn_scale, li), ffn_factor: Masks::factor(&masks.ffn_scale, li), ..Default::default() };
             if masks.skip.contains(&li) {
                 // Identity: the residual stream passes through unchanged.
+                rec.skipped = true;
+                if opt.keep {
+                    zs.push(vec![]);
+                }
                 if opt.measure {
                     let hv = h.to_vec2::<f32>()?;
                     let hidden_norm = hv.iter().map(|r| r.iter().map(|x| x * x).sum::<f32>().sqrt()).sum::<f32>() / seq as f32;
@@ -617,142 +823,202 @@ impl<'a> Model<'a> {
                     traces.push(LayerTrace { index: li as u32, hidden_norm, cos_prev: Some(1.0), head_entropy: vec![], top_neurons: vec![], router: vec![], logit_lens });
                     neuron_means.push(vec![]);
                 }
-                continue;
-            }
-            let h_in = h.clone();
-            let zero_attn = masks.zero_attn.contains(&li);
-            let zero_ffn = masks.zero_ffn.contains(&li);
-
-            // --- attention ---
-            let mut head_entropy: Vec<f32> = vec![];
-            if !zero_attn {
-            let x = match &l.attn_norm {
-                Some(n) if !self.spec.encoder => n.forward(&h)?,
-                _ => h.clone(),
-            };
-            let (q, k, v) = if let Some(qkv) = &l.qkv {
-                let y = qkv.forward(&x)?;
-                let qd = l.n_head * l.head_dim;
-                let kd = l.n_kv * l.head_dim;
-                (y.narrow(1, 0, qd)?, y.narrow(1, qd, kd)?, y.narrow(1, qd + kd, kd)?)
             } else {
-                (req(l.q.as_ref(), "attn_q")?.forward(&x)?, req(l.k.as_ref(), "attn_k")?.forward(&x)?, req(l.v.as_ref(), "attn_v")?.forward(&x)?)
-            };
-            let mut q = q.reshape((seq, l.n_head, l.head_dim))?;
-            let mut k = k.reshape((seq, l.n_kv, l.head_dim))?;
-            let v = v.reshape((seq, l.n_kv, l.head_dim))?;
-            if let Some(n) = &l.q_norm {
-                q = n.forward(&q)?;
-            }
-            if let Some(n) = &l.k_norm {
-                k = n.forward(&k)?;
-            }
-            let q = self.rope(&q, &cos, &sin)?.transpose(0, 1)?.contiguous()?;
-            let k = self.rope(&k, &cos, &sin)?.transpose(0, 1)?.contiguous()?;
-            let v = v.transpose(0, 1)?.contiguous()?;
-            let group = l.n_head / l.n_kv.max(1);
-            let (k, v) = if group > 1 {
-                let rep = |t: &Tensor| -> Result<Tensor> {
-                    Ok(t.unsqueeze(1)?.broadcast_as((l.n_kv, group, seq, l.head_dim))?.contiguous()?.reshape((l.n_head, seq, l.head_dim))?)
-                };
-                (rep(&k)?, rep(&v)?)
-            } else {
-                (k, v)
-            };
-            let mut scores = (q.matmul(&k.t()?.contiguous()?)? / (l.head_dim as f64).sqrt())?;
-            if let Some(m) = &mask {
-                scores = scores.broadcast_add(m)?;
-            }
-            let probs = softmax_last(&scores)?;
-            if opt.measure {
-                // Mean attention entropy per head over query positions.
-                let pv = probs.to_vec3::<f32>()?;
-                head_entropy = pv
-                    .iter()
-                    .map(|rows| {
-                        let e: f32 = rows.iter().map(|r| -r.iter().filter(|x| **x > 0.0).map(|x| x * x.ln()).sum::<f32>()).sum();
-                        e / rows.len().max(1) as f32
-                    })
-                    .collect();
-            }
-            let mut att = probs.matmul(&v)?.transpose(0, 1)?.contiguous()?.reshape((seq, l.n_head * l.head_dim))?;
-            if let Some(hs) = masks.heads.get(&li) {
-                let mut m = vec![1f32; l.n_head * l.head_dim];
-                for &hh in hs.iter().filter(|&&hh| hh < l.n_head) {
-                    m[hh * l.head_dim..(hh + 1) * l.head_dim].fill(0.0);
-                }
-                att = att.broadcast_mul(&Tensor::from_vec(m, (1, l.n_head * l.head_dim), &self.w.dev)?)?;
-            }
-            let mut att = l.o.forward(&att)?;
-            if let Some(n) = &l.attn_post_norm {
-                att = n.forward(&att)?;
-            }
-            h = (h + att)?;
-            }
-            if let Some(n) = &l.attn_out_norm {
-                h = n.forward(&h)?;
-            }
+                let h_in = h.clone();
+                let zero_attn = masks.zero_attn.contains(&li);
+                let zero_ffn = masks.zero_ffn.contains(&li);
 
-            // --- feed-forward ---
-            let mut means: Vec<f32> = vec![];
-            if !zero_ffn {
-            let x = match &l.ffn_norm {
-                Some(n) => n.forward(&h)?,
-                None => h.clone(),
-            };
-            let up = l.up.forward(&x)?;
-            let act = |t: &Tensor| -> Result<Tensor> {
-                Ok(match self.spec.act {
-                    Act::Silu => t.silu()?,
-                    Act::Gelu => t.gelu()?,
-                })
-            };
-            let inner = match &l.gate {
-                Some(g) => (act(&g.forward(&x)?)? * up)?,
-                None if l.fused_up => {
-                    let n = up.dim(1)? / 2;
-                    (act(&up.narrow(1, 0, n)?)? * up.narrow(1, n, n)?)?
-                }
-                None => act(&up)?,
-            };
-            let mut inner = inner;
-            if let Some(rs) = masks.neurons.get(&li) {
-                let n_ff = inner.dim(1)?;
-                let mut m = vec![1f32; n_ff];
-                for &(s0, e) in rs {
-                    if s0 < n_ff {
-                        m[s0..(e + 1).min(n_ff)].fill(0.0);
+                // --- attention ---
+                let mut head_entropy: Vec<f32> = vec![];
+                if !zero_attn {
+                    let x = match &l.attn_norm {
+                        Some(n) if !self.spec.encoder => n.forward(&h)?,
+                        _ => h.clone(),
+                    };
+                    let (q, k, v) = if let Some(qkv) = &l.qkv {
+                        let y = qkv.forward(&x)?;
+                        let qd = l.n_head * l.head_dim;
+                        let kd = l.n_kv * l.head_dim;
+                        (y.narrow(1, 0, qd)?, y.narrow(1, qd, kd)?, y.narrow(1, qd + kd, kd)?)
+                    } else {
+                        (req(l.q.as_ref(), "attn_q")?.forward(&x)?, req(l.k.as_ref(), "attn_k")?.forward(&x)?, req(l.v.as_ref(), "attn_v")?.forward(&x)?)
+                    };
+                    let mut q = q.reshape((seq, l.n_head, l.head_dim))?;
+                    let mut k = k.reshape((seq, l.n_kv, l.head_dim))?;
+                    let v = v.reshape((seq, l.n_kv, l.head_dim))?;
+                    if let Some(n) = &l.q_norm {
+                        q = n.forward(&q)?;
                     }
+                    if let Some(n) = &l.k_norm {
+                        k = n.forward(&k)?;
+                    }
+                    let q = self.rope(&q, &cos, &sin)?.transpose(0, 1)?.contiguous()?;
+                    let k = self.rope(&k, &cos, &sin)?.transpose(0, 1)?.contiguous()?;
+                    let v = v.transpose(0, 1)?.contiguous()?;
+                    let group = l.n_head / l.n_kv.max(1);
+                    let (k, v) = if group > 1 {
+                        let rep = |t: &Tensor| -> Result<Tensor> {
+                            Ok(t.unsqueeze(1)?.broadcast_as((l.n_kv, group, seq, l.head_dim))?.contiguous()?.reshape((l.n_head, seq, l.head_dim))?)
+                        };
+                        (rep(&k)?, rep(&v)?)
+                    } else {
+                        (k, v)
+                    };
+                    let mut scores = (q.matmul(&k.t()?.contiguous()?)? / (l.head_dim as f64).sqrt())?;
+                    if let Some(m) = &mask {
+                        scores = scores.broadcast_add(m)?;
+                    }
+                    let probs = softmax_last(&scores)?;
+                    if opt.measure {
+                        // Mean attention entropy per head over query positions.
+                        let pv = probs.to_vec3::<f32>()?;
+                        head_entropy = pv
+                            .iter()
+                            .map(|rows| {
+                                let e: f32 = rows.iter().map(|r| -r.iter().filter(|x| **x > 0.0).map(|x| x * x.ln()).sum::<f32>()).sum();
+                                e / rows.len().max(1) as f32
+                            })
+                            .collect();
+                    }
+                    if let Some(pos) = rpos {
+                        let pr = probs.narrow(1, pos, 1)?.squeeze(1)?.to_vec2::<f32>()?;
+                        rec.attn = pr.into_iter().map(|mut r| {
+                            r.truncate(if causal { pos + 1 } else { seq });
+                            r
+                        }).collect();
+                    }
+                    let width = l.n_head * l.head_dim;
+                    let mut att = probs.matmul(&v)?.transpose(0, 1)?.contiguous()?.reshape((seq, width))?;
+                    if let Some(hs) = masks.heads.get(&li) {
+                        let mut m = vec![1f32; width];
+                        for &(hh, f) in hs.iter().filter(|(hh, _)| *hh < l.n_head) {
+                            for x in &mut m[hh * l.head_dim..(hh + 1) * l.head_dim] {
+                                *x *= f;
+                            }
+                        }
+                        att = att.broadcast_mul(&Tensor::from_vec(m, (1, width), &self.w.dev)?)?;
+                    }
+                    if let Some(ps) = masks.patch_z.get(&li) {
+                        for (hh, src, all) in ps.iter().filter(|(hh, _, _)| *hh < l.n_head) {
+                            att = patch_rows(&att, src, *all, Some((hh * l.head_dim, (hh + 1) * l.head_dim)))?;
+                        }
+                    }
+                    if opt.keep {
+                        zs.push(att.to_vec2::<f32>()?);
+                    }
+                    if let Some(pos) = rpos {
+                        rec.z = row_of(&att, pos)?;
+                    }
+                    let mut att = l.o.forward(&att)?;
+                    if let Some(n) = &l.attn_post_norm {
+                        if let Some(pos) = rpos {
+                            rec.attn_pre_rms = Some(rms(&row_of(&att, pos)?, n.eps));
+                        }
+                        att = n.forward(&att)?;
+                    }
+                    if rec.attn_factor != 1.0 {
+                        att = (att * rec.attn_factor as f64)?;
+                    }
+                    if let Some(pos) = rpos {
+                        rec.attn_out = row_of(&att, pos)?;
+                    }
+                    h = (h + att)?;
+                } else if opt.keep {
+                    zs.push(vec![]);
                 }
-                inner = inner.broadcast_mul(&Tensor::from_vec(m, (1, n_ff), &self.w.dev)?)?;
-            }
-            if opt.measure {
-                means = inner.abs()?.mean(0)?.to_vec1::<f32>()?;
-            }
-            let mut ffn = l.down.forward(&inner)?;
-            if let Some(n) = &l.ffn_post_norm {
-                ffn = n.forward(&ffn)?;
-            }
-            h = (h + ffn)?;
-            }
-            if let Some(n) = &l.out_norm {
-                h = n.forward(&h)?;
+                if let Some(n) = &l.attn_out_norm {
+                    h = n.forward(&h)?;
+                }
+
+                // --- feed-forward ---
+                let mut means: Vec<f32> = vec![];
+                if !zero_ffn {
+                    let x = match &l.ffn_norm {
+                        Some(n) => n.forward(&h)?,
+                        None => h.clone(),
+                    };
+                    let up = l.up.forward(&x)?;
+                    let act = |t: &Tensor| -> Result<Tensor> {
+                        Ok(match self.spec.act {
+                            Act::Silu => t.silu()?,
+                            Act::Gelu => t.gelu()?,
+                        })
+                    };
+                    let inner = match &l.gate {
+                        Some(g) => (act(&g.forward(&x)?)? * up)?,
+                        None if l.fused_up => {
+                            let n = up.dim(1)? / 2;
+                            (act(&up.narrow(1, 0, n)?)? * up.narrow(1, n, n)?)?
+                        }
+                        None => act(&up)?,
+                    };
+                    let mut inner = inner;
+                    if let Some(rs) = masks.neurons.get(&li) {
+                        let n_ff = inner.dim(1)?;
+                        let mut m = vec![1f32; n_ff];
+                        for &(s0, e, f) in rs {
+                            if s0 < n_ff {
+                                for x in &mut m[s0..(e + 1).min(n_ff)] {
+                                    *x *= f;
+                                }
+                            }
+                        }
+                        inner = inner.broadcast_mul(&Tensor::from_vec(m, (1, n_ff), &self.w.dev)?)?;
+                    }
+                    if opt.measure {
+                        means = inner.abs()?.mean(0)?.to_vec1::<f32>()?;
+                    }
+                    if let Some(pos) = rpos {
+                        rec.inner = row_of(&inner, pos)?;
+                    }
+                    let mut ffn = l.down.forward(&inner)?;
+                    if let Some(n) = &l.ffn_post_norm {
+                        if let Some(pos) = rpos {
+                            rec.ffn_pre_rms = Some(rms(&row_of(&ffn, pos)?, n.eps));
+                        }
+                        ffn = n.forward(&ffn)?;
+                    }
+                    if rec.ffn_factor != 1.0 {
+                        ffn = (ffn * rec.ffn_factor as f64)?;
+                    }
+                    if let Some(pos) = rpos {
+                        rec.ffn_out = row_of(&ffn, pos)?;
+                    }
+                    h = (h + ffn)?;
+                }
+                if let Some(n) = &l.out_norm {
+                    h = n.forward(&h)?;
+                }
+
+                // --- measurements ---
+                if opt.measure {
+                    let hv = h.to_vec2::<f32>()?;
+                    let iv = h_in.to_vec2::<f32>()?;
+                    let hidden_norm = hv.iter().map(|r| r.iter().map(|x| x * x).sum::<f32>().sqrt()).sum::<f32>() / seq as f32;
+                    let cos_prev = iv.iter().zip(&hv).map(|(a, b)| cosine(a, b)).sum::<f32>() / seq as f32;
+                    let mut order: Vec<usize> = (0..means.len()).collect();
+                    order.sort_by(|a, b| means[*b].partial_cmp(&means[*a]).unwrap_or(std::cmp::Ordering::Equal));
+                    let top_neurons = order.iter().take(self.top_k).map(|&i| (i as u32, means[i])).collect();
+                    let logit_lens = measure_lens(&h, &mut lens_probs)?;
+                    traces.push(LayerTrace { index: li as u32, hidden_norm, cos_prev: Some(cos_prev), head_entropy, top_neurons, router: vec![], logit_lens });
+                    neuron_means.push(means);
+                }
             }
 
-            // --- measurements ---
-            if !opt.measure {
-                continue;
+            // --- edits on the residual stream after the layer ---
+            if let Some(v) = masks.steer.get(&li) {
+                h = h.broadcast_add(v)?;
             }
-            let hv = h.to_vec2::<f32>()?;
-            let iv = h_in.to_vec2::<f32>()?;
-            let hidden_norm = hv.iter().map(|r| r.iter().map(|x| x * x).sum::<f32>().sqrt()).sum::<f32>() / seq as f32;
-            let cos_prev = iv.iter().zip(&hv).map(|(a, b)| cosine(a, b)).sum::<f32>() / seq as f32;
-            let mut order: Vec<usize> = (0..means.len()).collect();
-            order.sort_by(|a, b| means[*b].partial_cmp(&means[*a]).unwrap_or(std::cmp::Ordering::Equal));
-            let top_neurons = order.iter().take(self.top_k).map(|&i| (i as u32, means[i])).collect();
-            let logit_lens = measure_lens(&h, &mut lens_probs)?;
-            traces.push(LayerTrace { index: li as u32, hidden_norm, cos_prev: Some(cos_prev), head_entropy, top_neurons, router: vec![], logit_lens });
-            neuron_means.push(means);
+            if let Some((src, all)) = masks.patch_h.get(&li) {
+                h = patch_rows(&h, src, *all, None)?;
+            }
+            if opt.keep {
+                hidden.push(h.to_vec2::<f32>()?);
+            }
+            if let (Some(r), Some(pos)) = (record.as_mut(), rpos) {
+                rec.h = row_of(&h, pos)?;
+                r.layers.push(rec);
+            }
         }
 
         let mut contributions = Vec::new();
@@ -788,12 +1054,12 @@ impl<'a> Model<'a> {
             if opt.all_logits {
                 let lg = self.head_logits(&h)?.ok_or_else(|| anyhow!("no output head"))?;
                 let mut last = lg.narrow(0, seq - 1, 1)?.squeeze(0)?.to_vec1::<f32>()?;
-                mask_logits(&mut last, &masks.tokens);
+                masks.apply_logits(&mut last);
                 last_logits = last;
                 all_logits = Some(lg);
             } else if let Some(lg) = self.head_logits(&h.narrow(0, seq - 1, 1)?)? {
                 last_logits = lg.squeeze(0)?.to_vec1::<f32>()?;
-                mask_logits(&mut last_logits, &masks.tokens);
+                masks.apply_logits(&mut last_logits);
             }
         }
         Ok(FwdOut {
@@ -802,31 +1068,238 @@ impl<'a> Model<'a> {
             all_logits,
             lens_probs,
             pooled,
+            record,
+            hidden,
+            zs,
         })
+    }
+
+    /// Masks for an intervention, including steering vectors and patching sources
+    /// (computed with clean runs of the prompts involved).
+    fn masks(&self, enc: &Encoder, a: &Ablation, max_tokens: usize, p: &dyn Progress) -> Result<Masks> {
+        let mut m = Masks::from(a);
+        if a.steer.is_empty() && a.patch.is_empty() {
+            return Ok(m);
+        }
+        let clean = Masks::default();
+        let encode = |t: &str| -> Vec<u32> {
+            let mut ids = enc.encode(t, true, None).ids;
+            ids.truncate(max_tokens.max(1));
+            ids
+        };
+        let keep = FwdOpt { keep: true, ..Default::default() };
+        for s in &a.steer {
+            let l = s.layer as usize;
+            if l >= self.layers.len() {
+                bail!("steer: no layer {l}");
+            }
+            p.set(3.0, "steering vector");
+            let mean_at = |text: &str| -> Result<Vec<f32>> {
+                let ids = encode(text);
+                if ids.is_empty() {
+                    bail!("steer: empty prompt");
+                }
+                let f = self.run(&ids, &clean, keep, p)?;
+                let rows = &f.hidden[l];
+                Ok((0..self.n_embd).map(|j| rows.iter().map(|r| r[j]).sum::<f32>() / rows.len() as f32).collect())
+            };
+            let (va, vb) = (mean_at(&s.a)?, mean_at(&s.b)?);
+            let v: Vec<f32> = va.iter().zip(&vb).map(|(x, y)| s.strength * (x - y)).collect();
+            let t = Tensor::from_vec(v, (1, self.n_embd), &self.w.dev)?;
+            let t = match m.steer.remove(&l) {
+                Some(prev) => (prev + t)?,
+                None => t,
+            };
+            m.steer.insert(l, t);
+        }
+        for pt in &a.patch {
+            let l = pt.layer as usize;
+            if l >= self.layers.len() {
+                bail!("patch: no layer {l}");
+            }
+            p.set(3.0, "patching source");
+            let ids = encode(&pt.source);
+            if ids.is_empty() {
+                bail!("patch: empty source prompt");
+            }
+            let f = self.run(&ids, &clean, keep, p)?;
+            match pt.head {
+                Some(hh) => {
+                    if f.zs[l].is_empty() {
+                        bail!("patch: layer {l} has no attention output to patch");
+                    }
+                    m.patch_z.entry(l).or_default().push((hh as usize, f.zs[l].clone(), pt.all_positions));
+                }
+                None => {
+                    m.patch_h.insert(l, (f.hidden[l].clone(), pt.all_positions));
+                }
+            }
+        }
+        Ok(m)
     }
 
     /// Greedy continuation; returns (ids, text, tokens/s).
     fn generate(&self, ids: &[u32], masks: &Masks, n: usize, eos: Option<u32>, p: &dyn Progress) -> Result<(Vec<u32>, String, f64)> {
+        self.generate_sampled(ids, masks, n, eos, &Sampling::default(), p)
+    }
+
+    fn generate_sampled(&self, ids: &[u32], masks: &Masks, n: usize, eos: Option<u32>, s: &Sampling, p: &dyn Progress) -> Result<(Vec<u32>, String, f64)> {
+        let t = Instant::now();
+        let steps = self.steps(ids, masks, n, eos, s, false, p)?;
+        let out: Vec<u32> = steps.iter().map(|st| st.token.id).collect();
+        let secs = t.elapsed().as_secs_f64().max(1e-9);
+        let text = self.detok(&out);
+        let tps = if out.is_empty() { 0.0 } else { out.len() as f64 / secs };
+        Ok((out, text, tps))
+    }
+
+    fn detok(&self, ids: &[u32]) -> String {
+        ids.iter().map(|i| self.vocab.tokens.get(*i as usize).map(|t| t.text.as_str()).unwrap_or("")).collect()
+    }
+
+    fn lens_token(&self, id: usize, prob: f32) -> LensToken {
+        LensToken { id: id as u32, text: self.vocab.tokens.get(id).map(|t| t.text.clone()).unwrap_or_default(), prob }
+    }
+
+    /// Generation with a per-step record (chosen token, entropy, alternatives, decision).
+    #[allow(clippy::too_many_arguments)]
+    fn steps(&self, ids: &[u32], masks: &Masks, n: usize, eos: Option<u32>, s: &Sampling, explain: bool, p: &dyn Progress) -> Result<Vec<GenStep>> {
         let mut cur = ids.to_vec();
         let mut out = Vec::new();
-        let t = Instant::now();
-        for _ in 0..n {
+        let mut rng = s.seed.unwrap_or(0x9E37_79B9_7F4A_7C15).max(1);
+        for step in 0..n {
             check_cancel(p)?;
-            let f = self.run(&cur, masks, FwdOpt::default(), p)?;
+            p.set(10.0 + 88.0 * step as f32 / n.max(1) as f32, &format!("token {}/{n}", step + 1));
+            let pos = cur.len() - 1;
+            let f = self.run(&cur, masks, FwdOpt { record: explain.then_some(pos), ..Default::default() }, p)?;
             if f.last_logits.is_empty() {
                 break;
             }
-            let next = argmax(&f.last_logits) as u32;
-            out.push(next);
-            cur.push(next);
-            if Some(next) == eos {
+            let lp = log_softmax(&f.last_logits);
+            let probs: Vec<f32> = lp.iter().map(|x| x.exp() as f32).collect();
+            let forced = s.forced.iter().find(|(st, _)| *st == step).map(|(_, t)| *t as usize);
+            let next = forced.unwrap_or_else(|| sample_token(&f.last_logits, s, &mut rng));
+            let alternatives: Vec<LensToken> = self.top_tokens(&probs).into_iter().filter(|t| t.id as usize != next).collect();
+            let decision = match (&f.record, explain) {
+                (Some(r), true) => self.decision(r, &f.last_logits, next as u32)?,
+                _ => None,
+            };
+            out.push(GenStep {
+                index: step,
+                position: pos,
+                token: self.lens_token(next, probs.get(next).copied().unwrap_or(0.0)),
+                entropy: entropy(&lp),
+                alternatives,
+                forced: forced.is_some(),
+                decision,
+            });
+            cur.push(next as u32);
+            if Some(next as u32) == eos {
                 break;
             }
         }
-        let secs = t.elapsed().as_secs_f64().max(1e-9);
-        let text: String = out.iter().map(|i| self.vocab.tokens.get(*i as usize).map(|t| t.text.as_str()).unwrap_or("")).collect();
-        let tps = if out.is_empty() { 0.0 } else { out.len() as f64 / secs };
-        Ok((out, text, tps))
+        Ok(out)
+    }
+
+    /// Direct logit attribution at the recorded position: how much the embedding, every
+    /// layer's mixer and FFN, every head and the top neurons push `chosen` against the
+    /// runner-up. The final norm is linearized (its scale is taken from the actual run).
+    fn decision(&self, r: &Record, logits: &[f32], chosen: u32) -> Result<Option<Decision>> {
+        let Some(head) = &self.lm_head else { return Ok(None) };
+        if self.spec.encoder || logits.is_empty() {
+            return Ok(None);
+        }
+        let lp = log_softmax(logits);
+        let probs: Vec<f32> = lp.iter().map(|x| x.exp() as f32).collect();
+        let c = chosen as usize;
+        let mut ru = 0usize;
+        let mut best = f32::NEG_INFINITY;
+        for (i, x) in logits.iter().enumerate() {
+            if i != c && *x > best {
+                best = *x;
+                ru = i;
+            }
+        }
+        let final_h = r.layers.last().map(|l| l.h.clone()).unwrap_or_else(|| r.emb.clone());
+        let w = self.w.rows(&head.name, &[chosen, ru as u32])?.to_vec2::<f32>()?;
+        let (g, eps) = match &self.out_norm {
+            Some(n) => (n.w.to_vec1::<f32>()?, n.eps),
+            None => (vec![1f32; final_h.len()], 1e-6),
+        };
+        let scale = 1.0 / rms(&final_h, eps);
+        let u: Vec<f32> = (0..final_h.len()).map(|j| (w[0][j] - w[1][j]) * g.get(j).copied().unwrap_or(1.0) * scale).collect();
+        let dotu = |v: &[f32]| -> f32 { if v.is_empty() { 0.0 } else { v.iter().zip(&u).map(|(a, b)| a * b).sum() } };
+        let embedding = dotu(&r.emb);
+        let mut layers = Vec::new();
+        let mut heads = Vec::new();
+        let mut neurons = Vec::new();
+        for (li, (l, rec)) in self.layers.iter().zip(&r.layers).enumerate() {
+            layers.push(LayerAttribution { layer: li as u32, attn: dotu(&rec.attn_out), ffn: dotu(&rec.ffn_out) });
+            if rec.skipped {
+                continue;
+            }
+            // Per-head outputs: the projection applied to each head's slice alone.
+            if !rec.z.is_empty() {
+                let width = l.n_head * l.head_dim;
+                let mut zm = vec![0f32; l.n_head * width];
+                for hh in 0..l.n_head {
+                    zm[hh * width + hh * l.head_dim..hh * width + (hh + 1) * l.head_dim].copy_from_slice(&rec.z[hh * l.head_dim..(hh + 1) * l.head_dim]);
+                }
+                let o = l.o.w.forward(&Tensor::from_vec(zm, (l.n_head, width), &self.w.dev)?)?.to_vec2::<f32>()?;
+                let post = match (&l.attn_post_norm, rec.attn_pre_rms) {
+                    (Some(n), Some(pr)) => Some((n.w.to_vec1::<f32>()?, pr)),
+                    _ => None,
+                };
+                for (hh, oh) in o.iter().enumerate() {
+                    let v: f32 = match &post {
+                        Some((pw, pr)) => oh.iter().zip(pw).zip(&u).map(|((a, wv), b)| a * wv / pr * b).sum(),
+                        None => dotu(oh),
+                    };
+                    heads.push(HeadAttribution { layer: li as u32, head: hh as u32, value: v * rec.attn_factor });
+                }
+            }
+            // Top neurons by |activation|: their columns of ffn_down alone.
+            if !rec.inner.is_empty() {
+                let n_ff = rec.inner.len();
+                let mut order: Vec<usize> = (0..n_ff).collect();
+                let k = 8.min(n_ff);
+                order.select_nth_unstable_by(k - 1, |a, b| rec.inner[*b].abs().partial_cmp(&rec.inner[*a].abs()).unwrap_or(std::cmp::Ordering::Equal));
+                let top = &order[..k];
+                let mut im = vec![0f32; k * n_ff];
+                for (i, &nn) in top.iter().enumerate() {
+                    im[i * n_ff + nn] = rec.inner[nn];
+                }
+                let o = l.down.w.forward(&Tensor::from_vec(im, (k, n_ff), &self.w.dev)?)?.to_vec2::<f32>()?;
+                let post = match (&l.ffn_post_norm, rec.ffn_pre_rms) {
+                    (Some(n), Some(pr)) => Some((n.w.to_vec1::<f32>()?, pr)),
+                    _ => None,
+                };
+                for (i, &nn) in top.iter().enumerate() {
+                    let v: f32 = match &post {
+                        Some((pw, pr)) => o[i].iter().zip(pw).zip(&u).map(|((a, wv), b)| a * wv / pr * b).sum(),
+                        None => dotu(&o[i]),
+                    };
+                    neurons.push(NeuronAttribution { layer: li as u32, neuron: nn as u32, activation: rec.inner[nn], value: v * rec.ffn_factor });
+                }
+            }
+        }
+        let attributed = embedding + layers.iter().map(|l| l.attn + l.ffn).sum::<f32>();
+        heads.sort_by(|a, b| b.value.abs().partial_cmp(&a.value.abs()).unwrap_or(std::cmp::Ordering::Equal));
+        heads.truncate(16);
+        neurons.sort_by(|a, b| b.value.abs().partial_cmp(&a.value.abs()).unwrap_or(std::cmp::Ordering::Equal));
+        neurons.truncate(16);
+        Ok(Some(Decision {
+            position: r.pos,
+            candidates: self.top_tokens(&probs),
+            chosen: self.lens_token(c, probs[c]),
+            runner_up: self.lens_token(ru, probs[ru]),
+            logit_diff: logits[c] - logits[ru],
+            attributed,
+            embedding,
+            layers,
+            top_heads: heads,
+            top_neurons: neurons,
+        }))
     }
 
     /// Per-position log-probabilities [seq-1][vocab] predicting the next token.
@@ -838,7 +1311,7 @@ impl<'a> Model<'a> {
             .into_iter()
             .take(n)
             .map(|mut r| {
-                mask_logits(&mut r, &masks.tokens);
+                masks.apply_logits(&mut r);
                 log_softmax(&r)
             })
             .collect())
@@ -1001,10 +1474,10 @@ impl TraceBackend for CandleBackend {
         p.set(1.0, "loading weights");
         let model = Model::load(m, &vocab, top_k, p)?;
         let base = Masks::default();
-        let abl = Masks::from(&req.ablation);
+        let abl = model.masks(&enc, &req.ablation, max_tokens, p)?;
         let mut warnings: Vec<String> = enc.warnings.clone();
-        if !req.ablation.zero_experts.is_empty() {
-            warnings.push("expert ablation is not supported by this forward pass; ignored".into());
+        if !req.ablation.zero_experts.is_empty() || !req.ablation.scale_experts.is_empty() {
+            warnings.push("expert edits are not supported by this forward pass; ignored".into());
         }
         let eos = m.gguf.get_u64("tokenizer.ggml.eos_token_id").map(|v| v as u32);
         let encode = |t: &str, warnings: &mut Vec<String>| -> Vec<u32> {
@@ -1018,19 +1491,27 @@ impl TraceBackend for CandleBackend {
         let n_steps = (req.prompts.len() * 2 + req.corpus.len()).max(1) as f32;
         let mut step = 0f32;
         let mut prompts = Vec::new();
-        for text in &req.prompts {
+        for (pi, text) in req.prompts.iter().enumerate() {
             check_cancel(p)?;
             let ids = encode(text, &mut warnings);
             if ids.is_empty() {
                 continue;
             }
+            let edited_text = req.edited_prompts.get(pi).filter(|t| *t != text).cloned();
+            let eids = match &edited_text {
+                Some(t) => encode(t, &mut warnings),
+                None => ids.clone(),
+            };
+            if eids.is_empty() {
+                continue;
+            }
             p.set(10.0 + 85.0 * step / n_steps, "baseline");
             step += 1.0;
-            let opt = FwdOpt { measure: true, lens_probs: true, all_logits: false };
-            let b = model.run(&ids, &base, opt, p)?;
-            p.set(10.0 + 85.0 * step / n_steps, "ablated");
+            let opt = |n: usize| FwdOpt { measure: true, lens_probs: true, record: req.decisions.then(|| n - 1), ..Default::default() };
+            let b = model.run(&ids, &base, opt(ids.len()), p)?;
+            p.set(10.0 + 85.0 * step / n_steps, "edited");
             step += 1.0;
-            let a = model.run(&ids, &abl, opt, p)?;
+            let a = model.run(&eids, &abl, opt(eids.len()), p)?;
             let (kl_v, top1_changed, btop, atop) = if b.last_logits.is_empty() {
                 (None, false, vec![], vec![])
             } else {
@@ -1054,16 +1535,23 @@ impl TraceBackend for CandleBackend {
                     }
                 })
                 .collect();
+            let decide = |f: &FwdOut| -> Result<Option<Decision>> {
+                match (&f.record, f.last_logits.is_empty()) {
+                    (Some(r), false) => model.decision(r, &f.last_logits, argmax(&f.last_logits) as u32),
+                    _ => Ok(None),
+                }
+            };
+            let (db, da) = (decide(&b)?, decide(&a)?);
             let (bg, ag) = if req.gen_tokens > 0 && !b.last_logits.is_empty() {
                 p.set(10.0 + 85.0 * step / n_steps, "generating");
-                (model.generate(&ids, &base, req.gen_tokens, eos, p)?, model.generate(&ids, &abl, req.gen_tokens, eos, p)?)
+                (model.generate(&ids, &base, req.gen_tokens, eos, p)?, model.generate_sampled(&eids, &abl, req.gen_tokens, eos, &req.sampling, p)?)
             } else {
                 let t0 = Instant::now();
                 model.run(&ids, &base, FwdOpt::default(), p)?;
                 let tb = ids.len() as f64 / t0.elapsed().as_secs_f64().max(1e-9);
                 let t1 = Instant::now();
-                model.run(&ids, &abl, FwdOpt::default(), p)?;
-                let ta = ids.len() as f64 / t1.elapsed().as_secs_f64().max(1e-9);
+                model.run(&eids, &abl, FwdOpt::default(), p)?;
+                let ta = eids.len() as f64 / t1.elapsed().as_secs_f64().max(1e-9);
                 ((vec![], String::new(), tb), (vec![], String::new(), ta))
             };
             let norm = |v: &Option<Vec<f32>>| v.as_ref().map(|x| x.iter().map(|y| y * y).sum::<f32>().sqrt());
@@ -1079,6 +1567,9 @@ impl TraceBackend for CandleBackend {
                     _ => None,
                 },
                 lens,
+                edited_prompt: edited_text,
+                decision_baseline: db,
+                decision_edited: da,
             });
         }
         let mut corpus = None;
@@ -1125,6 +1616,9 @@ impl TraceBackend for CandleBackend {
         if req.gen_tokens > 0 {
             warnings.push("generation recomputes the whole sequence for every token (no KV cache, CPU): tokens/s is only for comparing baseline and ablated".into());
         }
+        if !req.sampling.is_greedy() {
+            warnings.push(format!("the edited side samples (temperature {}): its text changes with the seed", req.sampling.temperature));
+        }
         Ok(SimReport {
             schema_version: SCHEMA_VERSION,
             model: m.entry.name.clone(),
@@ -1136,6 +1630,216 @@ impl TraceBackend for CandleBackend {
             corpus,
             weights_bytes_baseline: total,
             weights_bytes_ablated: total - skipped,
+            warnings,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    fn journey(&self, m: &ModelHandle, req: &JourneyRequest, p: &dyn Progress) -> Result<JourneyReport> {
+        let started = Instant::now();
+        let vocab = Vocab::from_gguf(&m.gguf)?;
+        let enc = Encoder::new(&vocab)?;
+        let top_k = req.top_k.max(1);
+        let max_tokens = if req.max_tokens == 0 { 256 } else { req.max_tokens };
+        let mut warnings: Vec<String> = enc.warnings.clone();
+        let mut ids = enc.encode(&req.text, true, None).ids;
+        if ids.len() > max_tokens {
+            warnings.push(format!("input truncated from {} to {max_tokens} tokens", ids.len()));
+            ids.truncate(max_tokens);
+        }
+        ids.extend(&req.append);
+        if ids.is_empty() {
+            bail!("the prompt produced no tokens");
+        }
+        let n = ids.len() as i64;
+        let pos = if req.token < 0 { n + req.token } else { req.token };
+        if pos < 0 || pos >= n {
+            bail!("token index {} is out of range (the sequence has {n} tokens: 0..{}, or -1 for the last)", req.token, n - 1);
+        }
+        let pos = pos as usize;
+        p.set(1.0, "loading weights");
+        let model = Model::load(m, &vocab, top_k, p)?;
+        let masks = model.masks(&enc, &req.ablation, max_tokens, p)?;
+        p.set(50.0, "forward pass");
+        let f = model.run(&ids[..=pos.max(if model.spec.encoder { ids.len() - 1 } else { pos })], &masks, FwdOpt { record: Some(pos), ..Default::default() }, p)?;
+        let rec = f.record.ok_or_else(|| anyhow!("nothing recorded"))?;
+        let token = |id: u32| JourneyToken {
+            id,
+            text: vocab.tokens.get(id as usize).map(|t| t.text.clone()).unwrap_or_default(),
+            special: vocab.tokens.get(id as usize).is_some_and(|t| matches!(t.token_type, TokenType::Control | TokenType::UserDefined)),
+        };
+        p.set(80.0, "logit lens");
+        let final_h = rec.layers.last().map(|l| l.h.clone()).unwrap_or_else(|| rec.emb.clone());
+        let dim = final_h.len();
+        let (prediction, final_probs) = if model.lm_head.is_some() {
+            model.lens_full(&Tensor::from_vec(final_h.clone(), (1, dim), &model.w.dev)?, &masks)?
+        } else {
+            (vec![], vec![])
+        };
+        let next = ids.get(pos + 1).map(|&i| token(i));
+        let target = next.as_ref().map(|t| t.id as usize).or_else(|| prediction.first().map(|t| t.id as usize));
+        let bucket_of = |l: u32, n_ff: usize| -> usize {
+            req.buckets.iter().find(|(x, _)| *x == l).map(|(_, b)| *b as usize).unwrap_or_else(|| {
+                let mut b = 64;
+                while n_ff / b > 256 {
+                    b *= 2;
+                }
+                b
+            })
+        };
+        let mut layers = Vec::new();
+        let (mut first_top1, mut first_top5) = (None, None);
+        for (li, r) in rec.layers.iter().enumerate() {
+            check_cancel(p)?;
+            let (lens, probs) = if model.lm_head.is_some() {
+                model.lens_full(&Tensor::from_vec(r.h.clone(), (1, dim), &model.w.dev)?, &masks)?
+            } else {
+                (vec![], vec![])
+            };
+            let (target_prob, target_rank) = match target {
+                Some(t) if !probs.is_empty() => {
+                    let pt = probs[t];
+                    (pt, probs.iter().filter(|x| **x > pt).count() as u32)
+                }
+                _ => (0.0, 0),
+            };
+            if target.is_some() && !probs.is_empty() {
+                if target_rank == 0 && first_top1.is_none() {
+                    first_top1 = Some(li as u32);
+                }
+                if target_rank < 5 && first_top5.is_none() {
+                    first_top5 = Some(li as u32);
+                }
+            }
+            let keys = r.attn.first().map_or(0, Vec::len);
+            let mut attended: Vec<(usize, f32)> = (0..keys).map(|k| (k, r.attn.iter().map(|h| h[k]).sum::<f32>() / r.attn.len().max(1) as f32)).collect();
+            attended.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            attended.truncate(5);
+            let n_ff = r.inner.len();
+            let mut ffn_buckets = Vec::new();
+            let mut top_neurons = Vec::new();
+            if n_ff > 0 {
+                let b = bucket_of(li as u32, n_ff).max(1);
+                let mut s0 = 0;
+                while s0 < n_ff {
+                    let e = (s0 + b).min(n_ff);
+                    let mean = r.inner[s0..e].iter().map(|x| x.abs()).sum::<f32>() / (e - s0) as f32;
+                    ffn_buckets.push((format!("layer.{li}.ffn.n.{s0}-{}", e - 1), mean));
+                    s0 = e;
+                }
+                ffn_buckets.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                ffn_buckets.truncate(5);
+                let mut order: Vec<usize> = (0..n_ff).collect();
+                order.sort_by(|a, b| r.inner[*b].abs().partial_cmp(&r.inner[*a].abs()).unwrap_or(std::cmp::Ordering::Equal));
+                top_neurons = order.iter().take(top_k).map(|&i| (i as u32, r.inner[i])).collect();
+            }
+            layers.push(JourneyLayer {
+                index: li as u32,
+                residual_norm: r.h.iter().map(|x| x * x).sum::<f32>().sqrt(),
+                lens,
+                target_prob,
+                target_rank,
+                attention: r.attn.clone(),
+                attended,
+                ffn_buckets,
+                top_neurons,
+                skipped: r.skipped,
+            });
+        }
+        let decision = match (target, final_probs.is_empty()) {
+            (Some(t), false) => {
+                let mut logits = model.head_logits(&Tensor::from_vec(final_h.clone(), (1, dim), &model.w.dev)?)?.ok_or_else(|| anyhow!("no output head"))?.squeeze(0)?.to_vec1::<f32>()?;
+                masks.apply_logits(&mut logits);
+                model.decision(&rec, &logits, t as u32)?
+            }
+            _ => None,
+        };
+        let mut highlight = Vec::new();
+        if let Some(d) = &decision {
+            highlight.extend(d.top_heads.iter().take(5).map(|h| format!("layer.{}.attn.head.{}", h.layer, h.head)));
+            let mut ls: Vec<&LayerAttribution> = d.layers.iter().collect();
+            ls.sort_by(|a, b| (b.attn.abs() + b.ffn.abs()).partial_cmp(&(a.attn.abs() + a.ffn.abs())).unwrap_or(std::cmp::Ordering::Equal));
+            for l in ls.iter().take(3) {
+                highlight.push(format!("layer.{}", l.layer));
+                highlight.push(format!("layer.{}.{}", l.layer, if l.attn.abs() >= l.ffn.abs() { "attn" } else { "ffn" }));
+                if let Some((b, _)) = layers.get(l.layer as usize).and_then(|x| x.ffn_buckets.first()) {
+                    highlight.push(b.clone());
+                }
+            }
+        }
+        if model.spec.encoder {
+            warnings.push("embedding model: there is no next-token prediction, so the logit lens and the decision breakdown are empty".into());
+        }
+        if m.architecture() == "gemma2" {
+            warnings.push("gemma2 logit/attention soft-capping is not applied".into());
+        }
+        p.set(100.0, "done");
+        Ok(JourneyReport {
+            schema_version: SCHEMA_VERSION,
+            model: m.entry.name.clone(),
+            architecture: m.architecture().to_string(),
+            backend: self.name().into(),
+            edited: !req.ablation.is_empty(),
+            text: req.text.clone(),
+            tokens: ids.iter().map(|&i| token(i)).collect(),
+            position: pos,
+            next,
+            layers,
+            prediction,
+            first_top1,
+            first_top5,
+            decision,
+            highlight,
+            warnings,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    fn generate(&self, m: &ModelHandle, req: &GenerateRequest, p: &dyn Progress) -> Result<GenerateReport> {
+        let started = Instant::now();
+        let vocab = Vocab::from_gguf(&m.gguf)?;
+        let enc = Encoder::new(&vocab)?;
+        let max_tokens = if req.max_tokens == 0 { 512 } else { req.max_tokens };
+        let mut warnings: Vec<String> = enc.warnings.clone();
+        let mut ids = enc.encode(&req.text, true, None).ids;
+        if ids.len() > max_tokens {
+            warnings.push(format!("input truncated from {} to {max_tokens} tokens", ids.len()));
+            ids.truncate(max_tokens);
+        }
+        if ids.is_empty() {
+            bail!("the prompt produced no tokens");
+        }
+        p.set(1.0, "loading weights");
+        let model = Model::load(m, &vocab, req.top_k.max(2), p)?;
+        if model.lm_head.is_none() {
+            bail!("this model has no output head (embedding model): it cannot generate");
+        }
+        let masks = model.masks(&enc, &req.ablation, max_tokens, p)?;
+        let eos = m.gguf.get_u64("tokenizer.ggml.eos_token_id").map(|v| v as u32);
+        let t = Instant::now();
+        let steps = model.steps(&ids, &masks, req.steps.max(1), eos, &req.sampling, req.explain, p)?;
+        let gen: Vec<u32> = steps.iter().map(|s| s.token.id).collect();
+        let tps = gen.len() as f64 / t.elapsed().as_secs_f64().max(1e-9);
+        warnings.push("no KV cache: every step reruns the whole sequence on the CPU".into());
+        let token = |id: u32| JourneyToken {
+            id,
+            text: vocab.tokens.get(id as usize).map(|t| t.text.clone()).unwrap_or_default(),
+            special: vocab.tokens.get(id as usize).is_some_and(|t| matches!(t.token_type, TokenType::Control | TokenType::UserDefined)),
+        };
+        p.set(100.0, "done");
+        Ok(GenerateReport {
+            schema_version: SCHEMA_VERSION,
+            model: m.entry.name.clone(),
+            architecture: m.architecture().to_string(),
+            backend: self.name().into(),
+            edited: !req.ablation.is_empty() || !req.sampling.is_greedy() || !req.sampling.forced.is_empty(),
+            text: req.text.clone(),
+            prompt_tokens: ids.iter().map(|&i| token(i)).collect(),
+            generated: model.detok(&gen),
+            generated_ids: gen,
+            steps,
+            sampling: req.sampling.clone(),
+            tokens_per_s: tps,
             warnings,
             elapsed_ms: started.elapsed().as_millis() as u64,
         })

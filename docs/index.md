@@ -22,8 +22,13 @@ shows what's inside them, and can write a smaller version that still runs.
 | `graph`, `node` | the model as a graph: open any layer down to its heads and neurons, inspect every part |
 | `ablate` | what happens if you cut a part: the direct impact instantly, then a simulated run |
 | `sweep` | every layer or head cut in turn, ranked by damage, and turned into a prune plan |
+| `tokens` | tokenization with the chat template, embedding norms and nearest tokens |
+| `journey`, `generate` | one token through every layer, and a generation timeline, with the decision breakdown |
+| `edit` | live edits (scale, zero, steer, patch, ban, sampling, prompt…): compare, undo, bake into a new GGUF |
 
-In the web interface the **graph** tab shows all of this in 3D (tower, city, force) or 2D. Search
+In the web interface the **graph** tab shows all of this in 2D or 3D (dataflow, tower, city, force), with
+a token-flow animation; the **tokens**, **journey**, **timeline** and **edits** pages inspect tokens and
+change the model live (see [Interventions](interventions.md)). Search
 inside the model, cut parts, and watch the impact update as you go. See
 [Graph and ablation](graph-and-ablation.md).
 
@@ -95,9 +100,10 @@ If you use NeuronDump in academic work, please cite the repository:
 ```bibtex
 @software{neurondump,
   author  = {Aymen},
+  email   = {aymenadvance@gmail.com}
   title   = {NeuronDump: inspecting, analyzing and slimming GGUF language models},
   year    = {2026},
-  version = {0.1.2},
+  version = {0.1.3},
   url     = {https://github.com/aymen94/NeuronDump},
   license = {MIT}
 }

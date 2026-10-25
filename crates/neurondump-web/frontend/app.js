@@ -3,8 +3,13 @@
 import { api, getToken } from './api.js';
 import { el, errorBox, store } from './ui.js';
 import * as views from './views.js';
+import * as inspector from './inspector.js';
+import { edits as editsPage, mountDrawer } from './edits.js';
+import { loadEdits } from './session.js';
 
-const MODEL_VIEWS = ['overview', 'vocab', 'tensors', 'layers', 'graph', 'template', 'stats', 'analyze', 'trace'];
+const MODEL_VIEWS = ['overview', 'vocab', 'tensors', 'layers', 'graph', 'tokens', 'journey', 'timeline', 'edits', 'template', 'stats', 'analyze', 'trace'];
+const PAGES = { ...views, tokens: inspector.tokens, journey: inspector.journey, timeline: inspector.timeline, edits: editsPage };
+const drawer = mountDrawer(() => currentModel);
 let current = null;
 let currentModel = '';
 const names = new Map();
@@ -46,9 +51,12 @@ async function route() {
       modelnav.replaceChildren(...MODEL_VIEWS.map((m) => el('a', { href: `#/model/${id}/${m}`, class: m === v ? 'active' : '' }, m)));
       label.textContent = await modelName(id);
       document.title = `${label.textContent} · ${v} · NeuronDump`;
-      node = await views[v](id, params);
+      loadEdits(id).catch(() => {});
+      drawer.refresh();
+      node = await PAGES[v](id, params);
     } else {
       if (parts[0] !== 'search') currentModel = '';
+      drawer.refresh();
       modelnav.hidden = true;
       label.textContent = '';
       document.title = 'NeuronDump';
