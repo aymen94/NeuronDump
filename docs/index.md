@@ -24,7 +24,11 @@ be written as JSON with a `schema_version`; the JSON Schemas are in
 
 ## Install
 
-Needs [Git](https://git-scm.com) and [Rust](https://rustup.rs) 1.88+.
+Ready-made Windows and Linux builds are on the
+[releases page](https://github.com/aymen94/NeuronDump/releases)
+([download steps](install.md#download-a-ready-made-build)).
+
+To build from source you need [Git](https://git-scm.com) and [Rust](https://rustup.rs) 1.88+.
 Full steps: [install guide](install.md).
 
 === "Windows (PowerShell)"

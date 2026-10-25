@@ -1,8 +1,12 @@
 # Getting started
 
-## 1. Build
+## 1. Install
 
-Follow the [install guide](install.md) for Windows or Linux. In short:
+The quickest way is a ready-made build from the
+[releases page](https://github.com/aymen94/NeuronDump/releases) (see
+[download steps](install.md#download-a-ready-made-build)). Those builds don't include `trace`.
+
+To build it yourself, follow the [install guide](install.md) for Windows or Linux. In short:
 
 ```sh
 cargo build --release                    # CLI + web interface

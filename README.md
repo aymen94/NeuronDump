@@ -10,7 +10,11 @@ It works with any model. It reads each file's own metadata; nothing is hard-code
 
 ## Install
 
-You need [Git](https://git-scm.com) and [Rust](https://rustup.rs) 1.88 or newer.
+**Download:** ready-made Windows and Linux builds are on the
+**[releases page](https://github.com/aymen94/NeuronDump/releases)**. Unzip and run `neurondump list`.
+Download steps and checks: **[install guide](docs/install.md#download-a-ready-made-build)**.
+
+**Build from source:** you need [Git](https://git-scm.com) and [Rust](https://rustup.rs) 1.88 or newer.
 Step-by-step instructions: **[Windows and Linux install guide](docs/install.md)**.
 
 **Windows** (PowerShell):
