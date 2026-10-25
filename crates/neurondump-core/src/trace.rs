@@ -26,6 +26,71 @@ pub struct TraceRequest {
     /// Truncate inputs to this many tokens.
     #[serde(default)]
     pub max_tokens: Option<usize>,
+    /// `auto`, `cpu`, `cuda` or `cuda:N` (None = auto).
+    #[serde(default)]
+    pub device: Option<String>,
+}
+
+/// How a run went: where it ran and how long it took.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunStats {
+    /// `cpu` or `cuda:N`.
+    pub device: String,
+    pub device_name: Option<String>,
+    /// Weight loading time (0 when the model was already loaded).
+    pub load_ms: u64,
+    /// Weights reused from an earlier job.
+    pub cached_weights: bool,
+    /// Tokens processed per second over all forward passes of the run.
+    pub tokens_per_s: f64,
+    pub forward_passes: usize,
+    /// Time per layer of one measured forward pass (synchronized), in ms.
+    #[serde(default)]
+    pub layer_ms: Vec<f32>,
+    /// Highest VRAM use seen while the run was going.
+    #[serde(default)]
+    pub peak_gpu: Option<crate::gpu::GpuSample>,
+    pub total_ms: u64,
+}
+
+/// A small binary measurement for drawing (never weights): little-endian `f32` or `u16`.
+#[derive(Debug, Clone, Default)]
+pub struct TensorBlob {
+    pub name: String,
+    /// `f32` or `u16` (u16 = value × 65535, for maps in [0, 1]).
+    pub dtype: &'static str,
+    pub shape: Vec<usize>,
+    pub data: Vec<u8>,
+    /// Optional names along the first axis (e.g. node ids of a sweep).
+    pub labels: Vec<String>,
+}
+
+impl TensorBlob {
+    pub fn f32(name: impl Into<String>, shape: Vec<usize>, v: &[f32]) -> Self {
+        Self { name: name.into(), dtype: "f32", shape, data: v.iter().flat_map(|x| x.to_le_bytes()).collect(), labels: vec![] }
+    }
+
+    /// Values in [0, 1] stored as u16.
+    pub fn unit_u16(name: impl Into<String>, shape: Vec<usize>, v: &[f32]) -> Self {
+        Self {
+            name: name.into(),
+            dtype: "u16",
+            shape,
+            data: v.iter().flat_map(|x| ((x.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes()).collect(),
+            labels: vec![],
+        }
+    }
+}
+
+/// A model held in memory by the backend for reuse across jobs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadedModel {
+    pub model: String,
+    pub digest: String,
+    pub device: String,
+    pub weights_bytes: u64,
+    pub idle_s: u64,
+    pub uses: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +145,11 @@ pub struct TraceReport {
     pub samples: usize,
     pub warnings: Vec<String>,
     pub elapsed_ms: u64,
+    #[serde(default)]
+    pub stats: Option<RunStats>,
+    /// Binary measurements for drawing; stored next to the job result, not in the JSON.
+    #[serde(skip)]
+    pub blobs: Vec<TensorBlob>,
 }
 
 /// In-memory cuts applied during a forward pass (nothing is written to disk).
@@ -136,6 +206,8 @@ pub struct SimRequest {
     pub top_k: usize,
     #[serde(default)]
     pub max_tokens: usize,
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +274,10 @@ pub struct SimReport {
     pub weights_bytes_ablated: u64,
     pub warnings: Vec<String>,
     pub elapsed_ms: u64,
+    #[serde(default)]
+    pub stats: Option<RunStats>,
+    #[serde(skip)]
+    pub blobs: Vec<TensorBlob>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +302,8 @@ pub struct SweepRequest {
     /// Filled by core from the graph.
     #[serde(default)]
     pub targets: Vec<SweepTarget>,
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +336,10 @@ pub struct SweepReport {
     pub ranking: Vec<String>,
     pub warnings: Vec<String>,
     pub elapsed_ms: u64,
+    #[serde(default)]
+    pub stats: Option<RunStats>,
+    #[serde(skip)]
+    pub blobs: Vec<TensorBlob>,
 }
 
 pub trait TraceBackend: Send + Sync {
@@ -269,6 +351,22 @@ pub trait TraceBackend: Send + Sync {
     }
     fn sweep(&self, _model: &ModelHandle, _req: &SweepRequest, _progress: &dyn Progress) -> Result<SweepReport> {
         bail!("this trace backend cannot run sweeps")
+    }
+    /// Built with CUDA support.
+    fn cuda_compiled(&self) -> bool {
+        false
+    }
+    /// A CUDA device answers.
+    fn cuda_available(&self) -> bool {
+        false
+    }
+    /// Models currently held in memory.
+    fn loaded(&self) -> Vec<LoadedModel> {
+        vec![]
+    }
+    /// Frees held models (all, or one digest); returns how many were freed.
+    fn unload(&self, _digest: Option<&str>) -> usize {
+        0
     }
 }
 

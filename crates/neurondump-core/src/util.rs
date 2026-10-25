@@ -74,6 +74,8 @@ pub trait Progress: Sync {
     fn cancelled(&self) -> bool {
         false
     }
+    /// Live GPU sample while a GPU job runs.
+    fn gpu(&self, _sample: &crate::gpu::GpuSample) {}
 }
 
 pub struct NoProgress;

@@ -17,6 +17,10 @@ default = ["cli", "web"]
 cli = ["dep:neurondump-cli"]
 web = ["cli", "dep:neurondump-web"]
 trace = ["dep:neurondump-trace"]
+# GPU inference with CUDA (MSVC toolchain + CUDA Toolkit, see SETUP-CUDA.md). Implies `trace`.
+cuda = ["trace", "neurondump-trace/cuda", "nvml"]
+# GPU information (name, VRAM, utilization) through NVML without CUDA inference.
+nvml = ["neurondump-core/nvml"]
 
 [dependencies]
 neurondump-core.workspace = true

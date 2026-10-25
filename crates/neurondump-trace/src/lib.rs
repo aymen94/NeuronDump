@@ -7,7 +7,9 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use candle_core::quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul};
@@ -15,9 +17,10 @@ use candle_core::{Device, Module, Tensor, D};
 
 use neurondump_core::model::ModelHandle;
 use neurondump_core::tokenizer::{Encoder, Vocab};
+use neurondump_core::gpu::DeviceChoice;
 use neurondump_core::trace::{
-    Ablation, CorpusEval, LayerTrace, LensDiff, LensToken, SimPrompt, SimReport, SimRequest, SimSide, SweepEntry, SweepReport, SweepRequest,
-    TokenContribution, TraceBackend, TraceReport, TraceRequest,
+    Ablation, CorpusEval, LayerTrace, LensDiff, LensToken, LoadedModel, RunStats, SimPrompt, SimReport, SimRequest, SimSide, SweepEntry,
+    SweepReport, SweepRequest, TensorBlob, TokenContribution, TraceBackend, TraceReport, TraceRequest,
 };
 use neurondump_core::util::{check_cancel, Progress, SCHEMA_VERSION};
 use neurondump_gguf::{GgmlType, GgufFile, TensorInfo};
@@ -87,13 +90,13 @@ fn candle_dtype(t: GgmlType) -> Option<GgmlDType> {
     })
 }
 
-struct Weights<'a> {
-    g: &'a GgufFile,
+struct Weights {
+    g: Arc<GgufFile>,
     dev: Device,
 }
 
-impl<'a> Weights<'a> {
-    fn info(&self, name: &str) -> Option<&'a TensorInfo> {
+impl Weights {
+    fn info(&self, name: &str) -> Option<&TensorInfo> {
         self.g.tensor(name)
     }
 
@@ -247,6 +250,7 @@ struct Layer {
     head_dim: usize,
 }
 
+#[derive(Clone)]
 pub struct Sample {
     pub tokens: Vec<u32>,
     pub layers: Vec<LayerTrace>,
@@ -255,8 +259,16 @@ pub struct Sample {
     pub contributions: Vec<TokenContribution>,
 }
 
-struct Model<'a> {
-    w: Weights<'a>,
+/// Forward-pass counters of the current job (reset per job).
+#[derive(Default)]
+struct Counters {
+    tokens: AtomicU64,
+    passes: AtomicU64,
+    nanos: AtomicU64,
+}
+
+struct Model {
+    w: Weights,
     spec: ArchSpec,
     layers: Vec<Layer>,
     out_norm: Option<Norm>,
@@ -269,8 +281,9 @@ struct Model<'a> {
     pooling: u64,
     /// Produces a pooled embedding (encoders, or decoders with a pooling type).
     pooled: bool,
-    vocab: &'a Vocab,
-    top_k: usize,
+    vocab: Arc<Vocab>,
+    top_k: AtomicUsize,
+    counters: Counters,
 }
 
 /// Per-pass ablation masks (built from a core [`Ablation`]).
@@ -283,9 +296,27 @@ struct Masks {
     neurons: HashMap<usize, Vec<(usize, usize)>>,
     zero_tensors: Vec<String>,
     tokens: Vec<(u32, u32)>,
+    /// Device tensors built on first use and reused by every later forward pass.
+    cache: RefCell<HashMap<(usize, u8), Tensor>>,
 }
 
 impl Masks {
+    /// 0/1 mask over `n` columns with `ranges` zeroed, kept on the model's device.
+    fn tensor(&self, layer: usize, kind: u8, n: usize, ranges: &[(usize, usize)], dev: &Device) -> Result<Tensor> {
+        if let Some(t) = self.cache.borrow().get(&(layer, kind)) {
+            return Ok(t.clone());
+        }
+        let mut m = vec![1f32; n];
+        for &(a, b) in ranges {
+            if a < n {
+                m[a..b.min(n)].fill(0.0);
+            }
+        }
+        let t = Tensor::from_vec(m, (1, n), dev)?;
+        self.cache.borrow_mut().insert((layer, kind), t.clone());
+        Ok(t)
+    }
+
     fn from(a: &Ablation) -> Self {
         let mut m = Masks { zero_tensors: a.zero_tensors.clone(), tokens: a.mask_tokens.clone(), ..Default::default() };
         m.skip.extend(a.skip_layers.iter().map(|&l| l as usize));
@@ -315,8 +346,41 @@ struct FwdOpt {
     all_logits: bool,
 }
 
+/// Attention probabilities of one layer, downsampled: [heads, size, size].
+struct AttnMap {
+    heads: usize,
+    size: usize,
+    data: Vec<f32>,
+}
+
+/// Average-pools a [seq, seq] map to at most `max` × `max`.
+fn pool_map(rows: &[Vec<f32>], max: usize) -> (usize, Vec<f32>) {
+    let seq = rows.len();
+    let size = seq.min(max).max(1);
+    let mut out = vec![0f32; size * size];
+    let mut cnt = vec![0f32; size * size];
+    for (i, r) in rows.iter().enumerate() {
+        let bi = i * size / seq.max(1);
+        for (j, v) in r.iter().enumerate() {
+            let bj = j * size / seq.max(1);
+            out[bi * size + bj] += v;
+            cnt[bi * size + bj] += 1.0;
+        }
+    }
+    for (o, c) in out.iter_mut().zip(&cnt) {
+        if *c > 0.0 {
+            *o /= c;
+        }
+    }
+    (size, out)
+}
+
 struct FwdOut {
     sample: Sample,
+    /// Synchronized time per layer (measured passes only), ms.
+    layer_ms: Vec<f32>,
+    /// Attention maps per layer (measured passes only; None for skipped / zeroed attention).
+    attn: Vec<Option<AttnMap>>,
     /// Next-token logits at the last position (token mask applied).
     last_logits: Vec<f32>,
     all_logits: Option<Tensor>,
@@ -393,12 +457,12 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-impl<'a> Model<'a> {
-    fn load(m: &'a ModelHandle, vocab: &'a Vocab, top_k: usize, p: &dyn Progress) -> Result<Self> {
-        let g = &m.gguf;
+impl Model {
+    fn load(m: &ModelHandle, vocab: Arc<Vocab>, top_k: usize, dev: Device, p: &dyn Progress) -> Result<Self> {
+        let g = m.gguf.clone();
         let arch = m.architecture().to_string();
         let spec = spec_for(&arch).ok_or_else(|| anyhow!("no forward pass for {arch}"))?;
-        let w = Weights { g, dev: Device::Cpu };
+        let w = Weights { g: g.clone(), dev };
         let k = |s: &str| g.arch_key(s);
         let n_embd = k("embedding_length").and_then(|v| v.as_u64()).context("embedding_length")? as usize;
         let n_layer = k("block_count").and_then(|v| v.as_u64()).context("block_count")? as usize;
@@ -463,7 +527,40 @@ impl<'a> Model<'a> {
         let pooling_key = k("pooling_type").and_then(|v| v.as_u64());
         let pooled = spec.encoder || pooling_key.is_some_and(|p| p > 0);
         let pooling = pooling_key.unwrap_or(1);
-        Ok(Self { w, spec, layers, out_norm, lm_head, embd_norm, n_embd, rope_dim, rope_base, rope_factors, pooling, pooled, vocab, top_k })
+        Ok(Self {
+            w,
+            spec,
+            layers,
+            out_norm,
+            lm_head,
+            embd_norm,
+            n_embd,
+            rope_dim,
+            rope_base,
+            rope_factors,
+            pooling,
+            pooled,
+            vocab,
+            top_k: AtomicUsize::new(top_k),
+            counters: Counters::default(),
+        })
+    }
+
+    fn top_k(&self) -> usize {
+        self.top_k.load(Ordering::Relaxed).max(1)
+    }
+
+    fn reset_counters(&self) {
+        self.counters.tokens.store(0, Ordering::Relaxed);
+        self.counters.passes.store(0, Ordering::Relaxed);
+        self.counters.nanos.store(0, Ordering::Relaxed);
+    }
+
+    /// Tokens per second and forward passes since the last reset.
+    fn throughput(&self) -> (f64, usize) {
+        let t = self.counters.tokens.load(Ordering::Relaxed) as f64;
+        let n = self.counters.nanos.load(Ordering::Relaxed) as f64 / 1e9;
+        (if n > 0.0 { t / n } else { 0.0 }, self.counters.passes.load(Ordering::Relaxed) as usize)
     }
 
     /// cos/sin tables [seq, rope_dim/2].
@@ -548,7 +645,7 @@ impl<'a> Model<'a> {
 
     fn top_tokens(&self, probs: &[f32]) -> Vec<LensToken> {
         let mut idx: Vec<usize> = (0..probs.len()).collect();
-        let k = self.top_k.min(idx.len());
+        let k = self.top_k().min(idx.len());
         idx.select_nth_unstable_by(k.saturating_sub(1), |a, b| probs[*b].partial_cmp(&probs[*a]).unwrap_or(std::cmp::Ordering::Equal));
         let mut top: Vec<usize> = idx[..k].to_vec();
         top.sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).unwrap_or(std::cmp::Ordering::Equal));
@@ -562,6 +659,18 @@ impl<'a> Model<'a> {
     }
 
     fn run(&self, ids: &[u32], masks: &Masks, opt: FwdOpt, p: &dyn Progress) -> Result<FwdOut> {
+        let started = Instant::now();
+        let mut out = self.run_inner(ids, masks, opt, p)?;
+        // Count finished work only (GPU kernels are asynchronous until a copy back).
+        self.w.dev.synchronize()?;
+        self.counters.tokens.fetch_add(ids.len() as u64, Ordering::Relaxed);
+        self.counters.passes.fetch_add(1, Ordering::Relaxed);
+        self.counters.nanos.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        out.layer_ms.shrink_to_fit();
+        Ok(out)
+    }
+
+    fn run_inner(&self, ids: &[u32], masks: &Masks, opt: FwdOpt, p: &dyn Progress) -> Result<FwdOut> {
         let _zero = ZeroGuard::new(&masks.zero_tensors);
         let seq = ids.len();
         let mut h = self.w.rows("token_embd.weight", ids)?;
@@ -593,6 +702,8 @@ impl<'a> Model<'a> {
         let mut traces = Vec::new();
         let mut neuron_means = Vec::new();
         let mut lens_probs = Vec::new();
+        let mut layer_ms = Vec::new();
+        let mut attn_maps: Vec<Option<AttnMap>> = Vec::new();
         let n_layers = self.layers.len();
         let measure_lens = |h: &Tensor, lens_probs: &mut Vec<Vec<f32>>| -> Result<Vec<LensToken>> {
             if opt.lens_probs {
@@ -607,7 +718,9 @@ impl<'a> Model<'a> {
             check_cancel(p)?;
             if opt.measure {
                 p.set(50.0 + 45.0 * li as f32 / n_layers as f32, &format!("layer {li}"));
+                self.w.dev.synchronize()?;
             }
+            let layer_start = Instant::now();
             if masks.skip.contains(&li) {
                 // Identity: the residual stream passes through unchanged.
                 if opt.measure {
@@ -616,9 +729,12 @@ impl<'a> Model<'a> {
                     let logit_lens = measure_lens(&h, &mut lens_probs)?;
                     traces.push(LayerTrace { index: li as u32, hidden_norm, cos_prev: Some(1.0), head_entropy: vec![], top_neurons: vec![], router: vec![], logit_lens });
                     neuron_means.push(vec![]);
+                    layer_ms.push(0.0);
+                    attn_maps.push(None);
                 }
                 continue;
             }
+            let mut attn_map: Option<AttnMap> = None;
             let h_in = h.clone();
             let zero_attn = masks.zero_attn.contains(&li);
             let zero_ffn = masks.zero_ffn.contains(&li);
@@ -674,14 +790,19 @@ impl<'a> Model<'a> {
                         e / rows.len().max(1) as f32
                     })
                     .collect();
+                let mut data = Vec::new();
+                let mut size = 0;
+                for rows in &pv {
+                    let (s, d) = pool_map(rows, 64);
+                    size = s;
+                    data.extend(d);
+                }
+                attn_map = Some(AttnMap { heads: pv.len(), size, data });
             }
             let mut att = probs.matmul(&v)?.transpose(0, 1)?.contiguous()?.reshape((seq, l.n_head * l.head_dim))?;
             if let Some(hs) = masks.heads.get(&li) {
-                let mut m = vec![1f32; l.n_head * l.head_dim];
-                for &hh in hs.iter().filter(|&&hh| hh < l.n_head) {
-                    m[hh * l.head_dim..(hh + 1) * l.head_dim].fill(0.0);
-                }
-                att = att.broadcast_mul(&Tensor::from_vec(m, (1, l.n_head * l.head_dim), &self.w.dev)?)?;
+                let ranges: Vec<(usize, usize)> = hs.iter().map(|&hh| (hh * l.head_dim, (hh + 1) * l.head_dim)).collect();
+                att = att.broadcast_mul(&masks.tensor(li, 0, l.n_head * l.head_dim, &ranges, &self.w.dev)?)?;
             }
             let mut att = l.o.forward(&att)?;
             if let Some(n) = &l.attn_post_norm {
@@ -717,14 +838,8 @@ impl<'a> Model<'a> {
             };
             let mut inner = inner;
             if let Some(rs) = masks.neurons.get(&li) {
-                let n_ff = inner.dim(1)?;
-                let mut m = vec![1f32; n_ff];
-                for &(s0, e) in rs {
-                    if s0 < n_ff {
-                        m[s0..(e + 1).min(n_ff)].fill(0.0);
-                    }
-                }
-                inner = inner.broadcast_mul(&Tensor::from_vec(m, (1, n_ff), &self.w.dev)?)?;
+                let ranges: Vec<(usize, usize)> = rs.iter().map(|&(a, b)| (a, b + 1)).collect();
+                inner = inner.broadcast_mul(&masks.tensor(li, 1, inner.dim(1)?, &ranges, &self.w.dev)?)?;
             }
             if opt.measure {
                 means = inner.abs()?.mean(0)?.to_vec1::<f32>()?;
@@ -743,13 +858,16 @@ impl<'a> Model<'a> {
             if !opt.measure {
                 continue;
             }
+            self.w.dev.synchronize()?;
+            layer_ms.push(layer_start.elapsed().as_secs_f32() * 1000.0);
+            attn_maps.push(attn_map);
             let hv = h.to_vec2::<f32>()?;
             let iv = h_in.to_vec2::<f32>()?;
             let hidden_norm = hv.iter().map(|r| r.iter().map(|x| x * x).sum::<f32>().sqrt()).sum::<f32>() / seq as f32;
             let cos_prev = iv.iter().zip(&hv).map(|(a, b)| cosine(a, b)).sum::<f32>() / seq as f32;
             let mut order: Vec<usize> = (0..means.len()).collect();
             order.sort_by(|a, b| means[*b].partial_cmp(&means[*a]).unwrap_or(std::cmp::Ordering::Equal));
-            let top_neurons = order.iter().take(self.top_k).map(|&i| (i as u32, means[i])).collect();
+            let top_neurons = order.iter().take(self.top_k()).map(|&i| (i as u32, means[i])).collect();
             let logit_lens = measure_lens(&h, &mut lens_probs)?;
             traces.push(LayerTrace { index: li as u32, hidden_norm, cos_prev: Some(cos_prev), head_entropy, top_neurons, router: vec![], logit_lens });
             neuron_means.push(means);
@@ -798,6 +916,8 @@ impl<'a> Model<'a> {
         }
         Ok(FwdOut {
             sample: Sample { tokens: ids.to_vec(), layers: traces, prediction, neuron_means, contributions },
+            layer_ms,
+            attn: attn_maps,
             last_logits,
             all_logits,
             lens_probs,
@@ -893,10 +1013,244 @@ fn cosine64(a: &[f32], b: &[f32]) -> f32 {
     cosine(a, b)
 }
 
-impl ModelTracer for Model<'_> {
+impl Sample {
+    fn clone_light(&self) -> Sample {
+        self.clone()
+    }
+}
+
+impl ModelTracer for Model {
     fn trace_tokens(&self, ids: &[u32], p: &dyn Progress) -> Result<Sample> {
         self.forward(ids, p)
     }
+}
+
+// --- devices ---------------------------------------------------------------------------------
+
+/// Prints how `auto` was resolved, once per process and outcome.
+fn note_once(msg: String) {
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    if seen.lock().unwrap().insert(msg.clone()) {
+        eprintln!("neurondump: {msg}");
+    }
+}
+
+fn gpu_name(index: usize) -> Option<String> {
+    neurondump_core::gpu::device(index as u32).map(|d| d.name)
+}
+
+/// The candle device for a `--device` choice, its label (`cpu`, `cuda:N`) and the GPU name.
+fn resolve_device(choice: Option<&str>) -> Result<(Device, String, Option<String>)> {
+    match DeviceChoice::parse(choice.unwrap_or("auto"))? {
+        DeviceChoice::Cpu => Ok((Device::Cpu, "cpu".into(), None)),
+        DeviceChoice::Auto => {
+            if !candle_core::utils::cuda_is_available() {
+                note_once("device auto -> cpu (this build has no CUDA support)".into());
+                return Ok((Device::Cpu, "cpu".into(), None));
+            }
+            match Device::new_cuda(0) {
+                Ok(d) => {
+                    let name = gpu_name(0);
+                    note_once(format!("device auto -> cuda:0{}", name.as_ref().map(|n| format!(" ({n})")).unwrap_or_default()));
+                    Ok((d, "cuda:0".into(), name))
+                }
+                Err(e) => {
+                    note_once(format!("device auto -> cpu (no usable CUDA device: {e})"));
+                    Ok((Device::Cpu, "cpu".into(), None))
+                }
+            }
+        }
+        DeviceChoice::Cuda(n) => {
+            if !candle_core::utils::cuda_is_available() {
+                bail!(
+                    "CUDA was requested (--device cuda) but this build has no CUDA support. Rebuild with \
+                     `cargo build --release --features cuda` on the MSVC toolchain (see SETUP-CUDA.md), or use --device cpu"
+                );
+            }
+            let d = Device::new_cuda(n).map_err(|e| {
+                anyhow!("CUDA device {n} is not usable: {e}. Is the NVIDIA driver installed and recent enough? Use --device cpu to run on the CPU")
+            })?;
+            Ok((d, format!("cuda:{n}"), gpu_name(n)))
+        }
+    }
+}
+
+// --- loaded-model cache ------------------------------------------------------------------------
+
+struct Entry {
+    digest: String,
+    device: String,
+    name: String,
+    model: Arc<Model>,
+    /// Serializes jobs on one loaded model.
+    run_lock: Arc<Mutex<()>>,
+    weights_bytes: u64,
+    last_used: Instant,
+    uses: u64,
+}
+
+fn cache() -> &'static Mutex<Vec<Entry>> {
+    static C: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Idle time after which a loaded model is freed (`NEURONDUMP_IDLE_UNLOAD_SECS`, default 600).
+fn idle_limit() -> Duration {
+    let s = std::env::var("NEURONDUMP_IDLE_UNLOAD_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
+    Duration::from_secs(s)
+}
+
+fn start_reaper() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let _ = std::thread::Builder::new().name("model-reaper".into()).spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(15));
+            let limit = idle_limit();
+            // Never drop a model a job is using (its run lock is held).
+            cache().lock().unwrap().retain(|e| e.last_used.elapsed() < limit || e.run_lock.try_lock().is_err());
+        });
+    });
+}
+
+/// Bytes NeuronDump puts on the device for a model (quantized matrices stay quantized).
+fn device_weight_bytes(m: &ModelHandle) -> u64 {
+    neurondump_core::gpu::fit(&m.entry.name, &m.gguf, 1, None).weights_bytes
+}
+
+struct Lease {
+    model: Arc<Model>,
+    run_lock: Arc<Mutex<()>>,
+    device: String,
+    device_name: Option<String>,
+    load_ms: u64,
+    cached: bool,
+}
+
+/// The model on the chosen device: reused if already loaded, otherwise loaded once (after a
+/// VRAM fit check for CUDA) and kept for later jobs.
+fn acquire(m: &ModelHandle, device: Option<&str>, ctx_tokens: usize, p: &dyn Progress) -> Result<Lease> {
+    let (dev, label, name) = resolve_device(device)?;
+    {
+        let mut c = cache().lock().unwrap();
+        if let Some(e) = c.iter_mut().find(|e| e.digest == m.entry.digest && e.device == label) {
+            e.last_used = Instant::now();
+            e.uses += 1;
+            p.set(5.0, &format!("weights already loaded on {label}"));
+            return Ok(Lease { model: e.model.clone(), run_lock: e.run_lock.clone(), device: label, device_name: name, load_ms: 0, cached: true });
+        }
+        if label != "cpu" {
+            // One model per GPU: free the others first.
+            c.retain(|e| e.device != label || e.run_lock.try_lock().is_err());
+        }
+    }
+    if let Some(idx) = label.strip_prefix("cuda:").and_then(|n| n.parse::<u32>().ok()) {
+        if let Some(gpu) = neurondump_core::gpu::device(idx) {
+            let f = neurondump_core::gpu::fit(&m.entry.name, &m.gguf, ctx_tokens.max(1), Some(&gpu));
+            if f.fits == Some(false) {
+                bail!(
+                    "{} won't fit on {label}: {}.\n  {}\nUse --device cpu, or fewer tokens (--max-tokens).",
+                    m.entry.name,
+                    f.verdict,
+                    f.details.join("\n  ")
+                );
+            }
+        }
+    }
+    p.set(1.0, &format!("loading weights on {label}"));
+    let t = Instant::now();
+    let vocab = Arc::new(Vocab::from_gguf(&m.gguf)?);
+    let model = Model::load(m, vocab, 5, dev, p).map_err(|e| {
+        let s = format!("{e:#}");
+        if s.contains("OUT_OF_MEMORY") || s.to_lowercase().contains("out of memory") {
+            anyhow!("out of GPU memory while loading {} on {label} ({s}). `neurondump fit {}` shows what it needs; use --device cpu", m.entry.name, m.entry.name)
+        } else {
+            e
+        }
+    })?;
+    let load_ms = t.elapsed().as_millis() as u64;
+    let model = Arc::new(model);
+    let run_lock = Arc::new(Mutex::new(()));
+    cache().lock().unwrap().push(Entry {
+        digest: m.entry.digest.clone(),
+        device: label.clone(),
+        name: m.entry.name.clone(),
+        model: model.clone(),
+        run_lock: run_lock.clone(),
+        weights_bytes: device_weight_bytes(m),
+        last_used: Instant::now(),
+        uses: 1,
+    });
+    start_reaper();
+    Ok(Lease { model, run_lock, device: label, device_name: name, load_ms, cached: false })
+}
+
+fn run_stats(lease: &Lease, model: &Model, layer_ms: Vec<f32>, started: Instant) -> RunStats {
+    let (tps, passes) = model.throughput();
+    RunStats {
+        device: lease.device.clone(),
+        device_name: lease.device_name.clone(),
+        load_ms: lease.load_ms,
+        cached_weights: lease.cached,
+        tokens_per_s: tps,
+        forward_passes: passes,
+        layer_ms,
+        peak_gpu: None,
+        total_ms: started.elapsed().as_millis() as u64,
+    }
+}
+
+// --- measurements for drawing ------------------------------------------------------------------
+
+/// Total budget for attention maps of one run (u16), so the page never gets big buffers.
+const ATTN_BUDGET: usize = 12 << 20;
+
+/// Per-layer summaries (+ attention maps) of one measured pass. `target` = token whose
+/// per-layer probability is the "lens confidence" (the final top token by default).
+fn blobs_for(prefix: &str, f: &FwdOut, target: Option<usize>) -> Vec<TensorBlob> {
+    let layers = &f.sample.layers;
+    let n = layers.len();
+    let mut out = vec![
+        TensorBlob::f32(format!("{prefix}layer_norm"), vec![n], &layers.iter().map(|l| l.hidden_norm).collect::<Vec<_>>()),
+        TensorBlob::f32(format!("{prefix}layer_change"), vec![n], &layers.iter().map(|l| 1.0 - l.cos_prev.unwrap_or(1.0)).collect::<Vec<_>>()),
+    ];
+    if let Some(t) = target {
+        let conf: Vec<f32> = f.lens_probs.iter().map(|p| p.get(t).copied().unwrap_or(0.0)).collect();
+        if conf.len() == n {
+            out.push(TensorBlob::f32(format!("{prefix}lens_conf"), vec![n], &conf));
+        }
+    }
+    let k = layers.iter().map(|l| l.top_neurons.len()).max().unwrap_or(0);
+    if k > 0 {
+        let mut v = vec![0f32; n * k * 2];
+        for (li, l) in layers.iter().enumerate() {
+            for (j, (idx, val)) in l.top_neurons.iter().enumerate() {
+                v[(li * k + j) * 2] = *idx as f32;
+                v[(li * k + j) * 2 + 1] = *val;
+            }
+        }
+        out.push(TensorBlob::f32(format!("{prefix}top_neurons"), vec![n, k, 2], &v));
+    }
+    let total: usize = f.attn.iter().flatten().map(|a| a.data.len() * 2).sum();
+    let shrink = if total > ATTN_BUDGET { 32 } else { 64 };
+    for (li, a) in f.attn.iter().enumerate() {
+        let Some(a) = a else { continue };
+        let (size, data) = if a.size > shrink {
+            let mut d = Vec::new();
+            let mut s = a.size;
+            for h in 0..a.heads {
+                let rows: Vec<Vec<f32>> = (0..a.size).map(|r| a.data[(h * a.size + r) * a.size..(h * a.size + r + 1) * a.size].to_vec()).collect();
+                let (ns, nd) = pool_map(&rows, shrink);
+                s = ns;
+                d.extend(nd);
+            }
+            (s, d)
+        } else {
+            (a.size, a.data.clone())
+        };
+        out.push(TensorBlob::unit_u16(format!("{prefix}attn.{li}"), vec![a.heads, size, size], &data));
+    }
+    out
 }
 
 pub struct CandleBackend;
@@ -915,17 +1269,47 @@ impl Default for CandleBackend {
 
 impl TraceBackend for CandleBackend {
     fn name(&self) -> &str {
-        "candle-cpu"
+        "candle"
     }
 
     fn supported_architectures(&self) -> Vec<String> {
         SUPPORTED.iter().map(|s| s.to_string()).collect()
     }
 
+    fn cuda_compiled(&self) -> bool {
+        candle_core::utils::cuda_is_available()
+    }
+
+    fn cuda_available(&self) -> bool {
+        static OK: OnceLock<bool> = OnceLock::new();
+        *OK.get_or_init(|| candle_core::utils::cuda_is_available() && Device::new_cuda(0).is_ok())
+    }
+
+    fn loaded(&self) -> Vec<LoadedModel> {
+        cache()
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| LoadedModel {
+                model: e.name.clone(),
+                digest: e.digest.clone(),
+                device: e.device.clone(),
+                weights_bytes: e.weights_bytes,
+                idle_s: e.last_used.elapsed().as_secs(),
+                uses: e.uses,
+            })
+            .collect()
+    }
+
+    fn unload(&self, digest: Option<&str>) -> usize {
+        let mut c = cache().lock().unwrap();
+        let before = c.len();
+        c.retain(|e| digest.is_some_and(|d| d != e.digest));
+        before - c.len()
+    }
+
     fn trace(&self, m: &ModelHandle, req: &TraceRequest, p: &dyn Progress) -> Result<TraceReport> {
         let started = Instant::now();
-        let vocab = Vocab::from_gguf(&m.gguf)?;
-        let enc = Encoder::new(&vocab)?;
         let top_k = req.top_k.unwrap_or(5).max(1);
         let max_tokens = req.max_tokens.unwrap_or(128).max(1);
         let mut texts: Vec<String> = req.prompt.iter().cloned().collect();
@@ -933,14 +1317,22 @@ impl TraceBackend for CandleBackend {
         if texts.is_empty() {
             bail!("nothing to trace");
         }
-        p.set(1.0, "loading weights");
-        let model = Model::load(m, &vocab, top_k, p)?;
+        let lease = acquire(m, req.device.as_deref(), max_tokens, p)?;
+        let lock = lease.run_lock.clone();
+        let _running = lock.lock().unwrap();
+        let model = &*lease.model;
+        model.top_k.store(top_k, Ordering::Relaxed);
+        model.reset_counters();
+        let vocab = model.vocab.clone();
+        let enc = Encoder::new(&vocab)?;
         let mut warnings: Vec<String> = enc.warnings.clone();
         if m.architecture() == "gemma2" {
             warnings.push("gemma2 logit/attention soft-capping is not applied".into());
         }
 
         let mut samples = Vec::new();
+        let mut last_out: Option<FwdOut> = None;
+        let n_texts = texts.len();
         for (i, t) in texts.iter().enumerate() {
             check_cancel(p)?;
             let mut ids = enc.encode(t, true, None).ids;
@@ -951,7 +1343,12 @@ impl TraceBackend for CandleBackend {
                 warnings.push(format!("sample {i}: truncated from {} to {max_tokens} tokens", ids.len()));
                 ids.truncate(max_tokens);
             }
-            samples.push(model.trace_tokens(&ids, p)?);
+            let last = i + 1 == n_texts;
+            let f = model.run(&ids, &Masks::default(), FwdOpt { measure: true, lens_probs: last, all_logits: false }, p)?;
+            samples.push(f.sample.clone_light());
+            if last {
+                last_out = Some(f);
+            }
         }
         let Some(last) = samples.last() else { bail!("inputs produced no tokens") };
         let n = samples.len();
@@ -975,12 +1372,16 @@ impl TraceBackend for CandleBackend {
         for &id in &last.tokens {
             hm.entry(id).or_insert_with(|| vocab.tokens.get(id as usize).map(|t| t.text.clone()).unwrap_or_default());
         }
+        let (blobs, layer_ms) = match &last_out {
+            Some(f) => (blobs_for("", f, f.sample.prediction.first().map(|t| t.id as usize)), f.layer_ms.clone()),
+            None => (vec![], vec![]),
+        };
         p.set(100.0, "done");
         Ok(TraceReport {
             schema_version: SCHEMA_VERSION,
             model: m.entry.name.clone(),
             architecture: m.architecture().to_string(),
-            backend: self.name().into(),
+            backend: format!("candle-{}", lease.device),
             supported: true,
             tokens: last.tokens.iter().map(|id| (*id, hm[id].clone())).collect(),
             layers,
@@ -989,17 +1390,23 @@ impl TraceBackend for CandleBackend {
             samples: n,
             warnings,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            stats: Some(run_stats(&lease, model, layer_ms, started)),
+            blobs,
         })
     }
 
     fn simulate(&self, m: &ModelHandle, req: &SimRequest, p: &dyn Progress) -> Result<SimReport> {
         let started = Instant::now();
-        let vocab = Vocab::from_gguf(&m.gguf)?;
-        let enc = Encoder::new(&vocab)?;
         let top_k = if req.top_k == 0 { 5 } else { req.top_k };
         let max_tokens = if req.max_tokens == 0 { 128 } else { req.max_tokens };
-        p.set(1.0, "loading weights");
-        let model = Model::load(m, &vocab, top_k, p)?;
+        let lease = acquire(m, req.device.as_deref(), max_tokens + req.gen_tokens, p)?;
+        let lock = lease.run_lock.clone();
+        let _running = lock.lock().unwrap();
+        let model = &*lease.model;
+        model.top_k.store(top_k, Ordering::Relaxed);
+        model.reset_counters();
+        let vocab = model.vocab.clone();
+        let enc = Encoder::new(&vocab)?;
         let base = Masks::default();
         let abl = Masks::from(&req.ablation);
         let mut warnings: Vec<String> = enc.warnings.clone();
@@ -1018,6 +1425,8 @@ impl TraceBackend for CandleBackend {
         let n_steps = (req.prompts.len() * 2 + req.corpus.len()).max(1) as f32;
         let mut step = 0f32;
         let mut prompts = Vec::new();
+        let mut blobs = Vec::new();
+        let mut layer_ms = Vec::new();
         for text in &req.prompts {
             check_cancel(p)?;
             let ids = encode(text, &mut warnings);
@@ -1041,6 +1450,11 @@ impl TraceBackend for CandleBackend {
                 (Some(kl(&lb, &la)), argmax(&b.last_logits) != argmax(&a.last_logits), model.top_tokens(&pb), model.top_tokens(&pa))
             };
             let target = btop.first().map(|t| t.id as usize);
+            if blobs.is_empty() {
+                blobs.extend(blobs_for("base.", &b, target));
+                blobs.extend(blobs_for("abl.", &a, target));
+                layer_ms = b.layer_ms.clone();
+            }
             let lens: Vec<LensDiff> = (0..b.sample.layers.len())
                 .map(|li| {
                     let tp = |v: &Vec<Vec<f32>>| target.and_then(|t| v.get(li).and_then(|r| r.get(t).copied())).unwrap_or(0.0);
@@ -1123,13 +1537,13 @@ impl TraceBackend for CandleBackend {
         p.set(100.0, "done");
         warnings.push("in-memory masks: process memory is the same for both runs; weight bytes are what a slimmed file would hold".into());
         if req.gen_tokens > 0 {
-            warnings.push("generation recomputes the whole sequence for every token (no KV cache, CPU): tokens/s is only for comparing baseline and ablated".into());
+            warnings.push("generation recomputes the whole sequence for every token (no KV cache): tokens/s is only for comparing baseline and ablated".into());
         }
         Ok(SimReport {
             schema_version: SCHEMA_VERSION,
             model: m.entry.name.clone(),
             architecture: m.architecture().to_string(),
-            backend: self.name().into(),
+            backend: format!("candle-{}", lease.device),
             cut: req.cut.clone(),
             ablation: req.ablation.clone(),
             prompts,
@@ -1138,19 +1552,25 @@ impl TraceBackend for CandleBackend {
             weights_bytes_ablated: total - skipped,
             warnings,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            stats: Some(run_stats(&lease, model, layer_ms, started)),
+            blobs,
         })
     }
 
     fn sweep(&self, m: &ModelHandle, req: &SweepRequest, p: &dyn Progress) -> Result<SweepReport> {
         let started = Instant::now();
-        let vocab = Vocab::from_gguf(&m.gguf)?;
-        let enc = Encoder::new(&vocab)?;
         let max_tokens = req.max_tokens.unwrap_or(64).max(2);
-        p.set(1.0, "loading weights");
-        let model = Model::load(m, &vocab, 5, p)?;
+        let lease = acquire(m, req.device.as_deref(), max_tokens, p)?;
+        let lock = lease.run_lock.clone();
+        let _running = lock.lock().unwrap();
+        let model = &*lease.model;
+        model.top_k.store(5, Ordering::Relaxed);
+        model.reset_counters();
         if model.lm_head.is_none() {
             bail!("sweeps measure next-token predictions; this model has no output head (embedding model)");
         }
+        let vocab = model.vocab.clone();
+        let enc = Encoder::new(&vocab)?;
         let mut warnings: Vec<String> = enc.warnings.clone();
         let masks: Vec<Masks> = req.targets.iter().map(|t| Masks::from(&t.ablation)).collect();
         let base = Masks::default();
@@ -1191,6 +1611,8 @@ impl TraceBackend for CandleBackend {
                 done += 1.0;
             }
         }
+        // One synchronized, measured baseline pass for per-layer timings.
+        let timed = model.run(&texts[0], &base, FwdOpt { measure: true, ..Default::default() }, p)?;
         let base_ppl = base_acc.ppl();
         let mut entries: Vec<SweepEntry> = req
             .targets
@@ -1214,6 +1636,8 @@ impl TraceBackend for CandleBackend {
         for (r, &i) in order.iter().enumerate() {
             entries[i].rank = r + 1;
         }
+        let mut damage = TensorBlob::f32("damage", vec![entries.len()], &entries.iter().map(|e| e.mean_kl as f32).collect::<Vec<_>>());
+        damage.labels = entries.iter().map(|e| e.id.clone()).collect();
         p.set(100.0, "done");
         warnings.dedup();
         Ok(SweepReport {
@@ -1230,6 +1654,8 @@ impl TraceBackend for CandleBackend {
             entries,
             warnings,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            stats: Some(run_stats(&lease, model, timed.layer_ms, started)),
+            blobs: vec![damage],
         })
     }
 }

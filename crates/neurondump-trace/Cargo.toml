@@ -13,3 +13,7 @@ neurondump-core.workspace = true
 neurondump-gguf.workspace = true
 anyhow.workspace = true
 candle-core = { version = "0.9", default-features = false }
+
+[features]
+# CUDA inference (needs the CUDA Toolkit and the MSVC toolchain, see SETUP-CUDA.md).
+cuda = ["candle-core/cuda", "neurondump-core/nvml"]

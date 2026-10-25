@@ -9,6 +9,7 @@ pub mod compare;
 pub mod config;
 pub mod discovery;
 pub mod export;
+pub mod gpu;
 pub mod graph;
 pub mod inspect;
 pub mod jobs;
