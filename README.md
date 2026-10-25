@@ -2,8 +2,6 @@
 
 Look inside any local LLM, find the parts it doesn't need, and make it smaller.
 
-**Website:** https://aymen94.github.io/NeuronDump/
-
 NeuronDump reads **GGUF** model files (the format used by **Ollama** and **llama.cpp**) and
 shows what is inside: layers, attention heads, vocabulary, chat template, weight statistics.
 It can then remove unused parts and write a smaller GGUF that still runs in Ollama and llama.cpp.
