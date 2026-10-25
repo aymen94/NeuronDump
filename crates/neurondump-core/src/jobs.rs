@@ -17,6 +17,8 @@ pub enum JobKind {
     Analyze,
     Slim,
     Trace,
+    Ablate,
+    Sweep,
 }
 
 impl JobKind {
@@ -27,6 +29,8 @@ impl JobKind {
             JobKind::Analyze => "analyze",
             JobKind::Slim => "slim",
             JobKind::Trace => "trace",
+            JobKind::Ablate => "ablate",
+            JobKind::Sweep => "sweep",
         }
     }
 
@@ -37,6 +41,8 @@ impl JobKind {
             "analyze" => JobKind::Analyze,
             "slim" => JobKind::Slim,
             "trace" => JobKind::Trace,
+            "ablate" => JobKind::Ablate,
+            "sweep" => JobKind::Sweep,
             _ => return None,
         })
     }

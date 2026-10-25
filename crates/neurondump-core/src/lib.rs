@@ -1,6 +1,7 @@
 //! NeuronDump core: the only place analysis logic lives. Front ends (CLI, web) call this
 //! API and render its serializable results.
 
+pub mod ablate;
 pub mod analyze;
 pub mod app;
 pub mod arch;
@@ -8,6 +9,7 @@ pub mod compare;
 pub mod config;
 pub mod discovery;
 pub mod export;
+pub mod graph;
 pub mod inspect;
 pub mod jobs;
 pub mod model;

@@ -15,6 +15,7 @@ use rustyline::validate::Validator;
 use rustyline::{Context, Editor, Helper};
 use serde_json::{json, Value};
 
+use neurondump_core::graph::ModelGraph;
 use neurondump_core::tokenizer::TokenClass;
 use neurondump_core::JobKind;
 
@@ -36,6 +37,15 @@ const COMMANDS: &[(&str, &str)] = &[
     ("trace", "trace <prompt>         runtime trace (needs --features trace)"),
     ("compare", "compare <model>...     compare with other models"),
     ("export", "export --format json|ndjson|csv [--table t] [--out f]"),
+    ("graph", "graph [--level layer|block|tensor|fine] [--group-by g] [--format tree|dot|mermaid|json] [--expand id]"),
+    ("node", "node <id>              what a graph node contains, stats, connections"),
+    ("cut", "cut <id>...            add nodes to the cut selection (shows the static impact)"),
+    ("uncut", "uncut <id>|all         remove nodes from the selection"),
+    ("selection", "selection              the current cut selection"),
+    ("impact", "impact [--force]       full static impact of the selection"),
+    ("simulate", "simulate [prompt] [--tokens N] [--corpus f] [--force]   run the selection in memory (& for background)"),
+    ("sweep", "sweep --corpus f [--level layer|head] [--layer N]   rank by damage (& for background)"),
+    ("plan", "plan save <file> [--force]   write the selection as a prune plan for `slim`"),
     ("jobs", "jobs                   background jobs"),
     ("job", "job <id>               show a finished job's result"),
     ("cancel", "cancel <id>            cancel a job"),
@@ -48,6 +58,26 @@ const COMMANDS: &[(&str, &str)] = &[
 struct ReplHelper {
     models: Mutex<Vec<String>>,
     tensors: Mutex<Vec<String>>,
+    graph: Mutex<Option<Arc<ModelGraph>>>,
+}
+
+impl ReplHelper {
+    /// Node ids for completion; fine ids (heads, neuron buckets, experts) once a layer prefix is typed.
+    fn node_ids(&self, word: &str) -> Vec<String> {
+        let Some(g) = self.graph.lock().unwrap().clone() else { return vec![] };
+        let mut ids = g.ids();
+        if let Some(rest) = word.strip_prefix("layer.") {
+            if let Some((n, _)) = rest.split_once('.') {
+                let lid = format!("layer.{n}");
+                for b in g.children(&lid) {
+                    if b.lazy {
+                        ids.extend(g.fine_children(&b.id).into_iter().map(|c| c.id));
+                    }
+                }
+            }
+        }
+        ids
+    }
 }
 
 impl Completer for ReplHelper {
@@ -66,8 +96,13 @@ impl Completer for ReplHelper {
             (_, Some("--class")) => pairs(TokenClass::ALL.iter().map(|c| c.as_str().to_string()).collect()),
             (_, Some("--tensor")) | (_, Some("--role")) => pairs(self.tensors.lock().unwrap().clone()),
             (_, Some("--sort")) => pairs(["size", "type", "layer", "name", "offset"].map(String::from).to_vec()),
+            (Some("graph"), Some("--format")) => pairs(["tree", "json", "dot", "mermaid"].map(String::from).to_vec()),
             (_, Some("--format")) => pairs(["json", "ndjson", "csv"].map(String::from).to_vec()),
             (_, Some("--table")) => pairs(["tensors", "vocab", "metadata", "layers"].map(String::from).to_vec()),
+            (_, Some("--level")) => pairs(["section", "layer", "block", "tensor", "fine", "head", "expert"].map(String::from).to_vec()),
+            (_, Some("--group-by")) => pairs(["section", "layer", "block", "quant", "kind", "importance"].map(String::from).to_vec()),
+            (_, Some("--expand")) | (Some("node" | "cut" | "uncut"), _) => pairs(self.node_ids(word)),
+            (Some("plan"), _) if words.len() == 1 => pairs(vec!["save".into()]),
             (Some("use" | "compare"), _) => pairs(self.models.lock().unwrap().clone()),
             _ => vec![],
         };
@@ -158,7 +193,7 @@ fn pick_model(ctx: &Ctx) -> Option<String> {
 }
 
 /// Commands that run as core jobs when suffixed with `&`.
-fn background(ctx: &Ctx, model: &str, cmd: &str, rest: &[String]) -> Result<String> {
+fn background(ctx: &Ctx, model: &str, cmd: &str, rest: &[String], selection: &[String]) -> Result<String> {
     let has = |f: &str| rest.iter().any(|a| a == f);
     let values = |f: &str| -> Vec<String> {
         let mut v = Vec::new();
@@ -183,7 +218,27 @@ fn background(ctx: &Ctx, model: &str, cmd: &str, rest: &[String]) -> Result<Stri
             (JobKind::Trace, json!({ "prompt": prompt.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ") }))
         }
         "info" | "inspect" => (JobKind::Inspect, json!({ "stats": true })),
-        other => bail!("`{other}` cannot run in the background (stats, analyze, trace, info)"),
+        "simulate" => {
+            if selection.is_empty() {
+                bail!("nothing selected (`cut <id>` first)");
+            }
+            let prompt: Vec<&String> = rest.iter().take_while(|a| !a.starts_with("--")).collect();
+            let prompt = (!prompt.is_empty()).then(|| prompt.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "));
+            let tokens = values("--tokens").first().and_then(|t| t.parse::<usize>().ok()).unwrap_or(16);
+            (
+                JobKind::Ablate,
+                json!({ "cut": selection, "prompt": prompt, "corpus_file": values("--corpus").first(), "tokens": tokens, "force": has("--force") }),
+            )
+        }
+        "sweep" => (
+            JobKind::Sweep,
+            json!({
+                "level": values("--level").first().cloned().unwrap_or_else(|| "layer".into()),
+                "layer": values("--layer").first().and_then(|l| l.parse::<u32>().ok()),
+                "corpus_file": values("--corpus").first(),
+            }),
+        ),
+        other => bail!("`{other}` cannot run in the background (stats, analyze, trace, info, simulate, sweep)"),
     };
     let id = ctx.app.submit(kind, model, params)?;
     Ok(format!("started job {id} (see `jobs`, `job {id}`, `cancel {id}`)\n"))
@@ -199,6 +254,16 @@ fn show_job(ctx: &Ctx, id: &str) -> Result<String> {
         JobKind::Analyze => render::plan(&serde_json::from_value(v)?),
         JobKind::Slim => render::slim(&serde_json::from_value(v)?),
         JobKind::Trace => render::trace(&serde_json::from_value(v)?),
+        JobKind::Ablate => {
+            let r: neurondump_core::ablate::AblateResult = serde_json::from_value(v)?;
+            let mut s = render::impact(&r.impact);
+            if let Some(sim) = &r.simulation {
+                s.push('\n');
+                s.push_str(&render::simulation(sim));
+            }
+            s
+        }
+        JobKind::Sweep => render::sweep(&serde_json::from_value(v)?),
         JobKind::Inspect => {
             let stats: Value = v["stats"].clone();
             if stats.is_null() {
@@ -214,6 +279,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
     let helper = ReplHelper {
         models: Mutex::new(ctx.app.library().entries.iter().map(|e| e.name.clone()).collect()),
         tensors: Mutex::new(Vec::new()),
+        graph: Mutex::new(None),
     };
     let mut ed: Editor<ReplHelper, FileHistory> = Editor::new()?;
     ed.set_helper(Some(helper));
@@ -231,12 +297,15 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                 roles.dedup();
                 names.extend(roles);
                 *h.tensors.lock().unwrap() = names;
+                *h.graph.lock().unwrap() = ctx.app.graph(&mh).ok();
             }
         }
     };
     set_tensors(&mut ed, &current);
     println!("NeuronDump REPL — type `help` for commands, Tab to complete, `exit` to quit.");
     let web_running: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    // Cut selection for impact / simulate / plan (cleared by `use`).
+    let mut selection: Vec<String> = Vec::new();
 
     loop {
         let prompt = format!("neurondump[{}]> ", current.as_deref().unwrap_or("-"));
@@ -275,6 +344,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                     let Some(m) = args.first() else { bail!("use <model>") };
                     let e = ctx.app.resolve(m)?;
                     current = Some(e.name.clone());
+                    selection.clear();
                     set_tensors(&mut ed, &current);
                     format!("using {} ({})\n", e.name, e.path.display())
                 }
@@ -311,7 +381,79 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                     *running = true;
                     "web UI starting in the background (URL with token printed above)\n".into()
                 }
-                _ if bg => background(ctx, &need_model()?, &cmd, &args)?,
+                "cut" | "uncut" | "selection" | "impact" | "plan" => {
+                    let model = need_model()?;
+                    let m = ctx.app.open(&model)?;
+                    let g = ctx.app.graph(&m)?;
+                    let force = args.iter().any(|a| a == "--force");
+                    match cmd.as_str() {
+                        "cut" => {
+                            if args.is_empty() {
+                                bail!("cut <id>...");
+                            }
+                            for a in args.iter().filter(|a| !a.starts_with("--")) {
+                                let id = g.resolve_id(a).ok_or_else(|| anyhow::anyhow!("unknown node {a:?} (Tab completes ids)"))?;
+                                if !selection.contains(&id) {
+                                    selection.push(id);
+                                }
+                            }
+                        }
+                        "uncut" => {
+                            if args.first().is_some_and(|a| a == "all") {
+                                selection.clear();
+                            } else {
+                                for a in &args {
+                                    let id = g.resolve_id(a).unwrap_or_else(|| a.clone());
+                                    selection.retain(|x| x != &id);
+                                }
+                            }
+                        }
+                        "plan" => {
+                            let (Some("save"), Some(file)) = (args.first().map(String::as_str), args.get(1)) else { bail!("plan save <file>") };
+                            let plan = ctx.app.plan_from_cut(&m, &selection, force)?;
+                            std::fs::write(file, serde_json::to_vec_pretty(&plan)?).map_err(|e| anyhow::anyhow!("writing {file}: {e}"))?;
+                            return Ok(format!("{}plan written to {file} (apply with `slim --plan {file} --out <name>.gguf`)\n", render::plan(&plan)));
+                        }
+                        _ => {}
+                    }
+                    if selection.is_empty() {
+                        return Ok("selection is empty (`cut <id>`)\n".into());
+                    }
+                    let i = ctx.app.impact(&m, &selection, force)?;
+                    if cmd == "impact" {
+                        render::impact(&i)
+                    } else {
+                        format!(
+                            "selection: {}\n{} params, {} -> {}, verdict {}{}\n",
+                            selection.join(", "),
+                            neurondump_core::util::human_count(i.params_removed + i.params_zeroed),
+                            neurondump_core::util::human_bytes(i.original_size),
+                            neurondump_core::util::human_bytes(i.new_size),
+                            i.verdict.as_str(),
+                            if i.refused { " (refused without --force)" } else { "" }
+                        )
+                    }
+                }
+                _ if bg => background(ctx, &need_model()?, &cmd, &args, &selection)?,
+                "simulate" => {
+                    if selection.is_empty() {
+                        bail!("nothing selected (`cut <id>` first)");
+                    }
+                    let model = need_model()?;
+                    let mut argv: Vec<String> = vec!["neurondump".into()];
+                    if ctx.global.json {
+                        argv.push("--json".into());
+                    }
+                    argv.extend(["ablate".into(), model, "--cut".into(), selection.join(",")]);
+                    let prompt: Vec<String> = args.iter().take_while(|a| !a.starts_with("--")).cloned().collect();
+                    if !prompt.is_empty() {
+                        argv.extend(["--prompt".into(), prompt.join(" ")]);
+                    }
+                    argv.extend(args.iter().skip(prompt.len()).cloned());
+                    let cli = Cli::try_parse_from(&argv).map_err(|e| anyhow::anyhow!("{e}"))?;
+                    let Some(c) = cli.command else { bail!("no command") };
+                    run_command(ctx, &c)?
+                }
                 _ => {
                     let mut argv: Vec<String> = vec!["neurondump".into()];
                     if ctx.global.json {
@@ -359,7 +501,11 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                             argv.extend(["compare".into(), need_model()?]);
                             argv.extend(args.clone());
                         }
-                        "tensors" | "layers" | "template" | "stats" | "analyze" | "slim" | "export" => {
+                        "node" => {
+                            let Some(id) = args.first() else { bail!("node <id>") };
+                            argv.extend(["node".into(), need_model()?, id.clone()]);
+                        }
+                        "tensors" | "layers" | "template" | "stats" | "analyze" | "slim" | "export" | "graph" | "sweep" => {
                             argv.extend([cmd.clone(), need_model()?]);
                             argv.extend(args.clone());
                         }

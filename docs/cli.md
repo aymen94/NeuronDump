@@ -95,6 +95,37 @@ Needs a build with `--features trace`. See [Trace](trace.md).
 | `--top-k N` | how many tokens / neurons to show per layer |
 | `--max-tokens N` | cut long inputs |
 
+### `graph <model>`
+The model as a graph. See [Graph and ablation](graph-and-ablation.md).
+
+| Option | |
+|---|---|
+| `--level section\|layer\|block\|tensor\|fine` | how deep to go (default `layer`) |
+| `--group-by section\|layer\|block\|quant\|kind\|importance` | how to group nodes |
+| `--expand <id,...>` | open these nodes (for example `layer.7.attn` for its heads) |
+| `--format tree\|json\|dot\|mermaid` | output format (default `tree`) |
+| `--out <file>` | write to a file |
+
+### `node <model> <id>`
+What a node contains, its statistics, its connections and whether it can be removed.
+
+### `ablate <model> --cut <id,...>`
+Impact of removing or zeroing these nodes, then a simulated run if the build has `trace`.
+
+| Option | |
+|---|---|
+| `--static` | only the instant estimate, no inference |
+| `--prompt "<text>"` | prompt to compare (default "The capital of Italy is") |
+| `--corpus <file>` | texts separated by blank lines: perplexity and mean KL |
+| `--tokens N` | greedy tokens to generate (default 16) |
+| `--force` | allow `breaks_model` cuts |
+| `--save-plan <file>` | write the cut as a prune plan for `slim` |
+
+### `sweep <model> --corpus <file>`
+Cuts each layer (`--level layer`) or each head of one layer (`--level head --layer N`) in turn
+and ranks them by damage. `--out` writes the JSON, and `--save-plan <file> --top N` writes the N
+least damaging as a prune plan.
+
 ### `compare <model> <model> [...]`
 Side by side: sizes, layers, tokenizer, vocabulary overlap, differing metadata.
 
@@ -123,7 +154,7 @@ Pick a model from the list (type to filter). The prompt then shows it:
 ```
 neurondump[llama3.2:1b]> info
 neurondump[llama3.2:1b]> layer 3
-neurondump[llama3.2:1b]> vocab Paris --limit 5
+neurondump[llama3.2:1b]> vocab Rome --limit 5
 neurondump[llama3.2:1b]> stats &          # & = run in the background
 neurondump[llama3.2:1b]> jobs
 neurondump[llama3.2:1b]> use nomic-embed-text
@@ -136,12 +167,17 @@ neurondump[llama3.2:1b]> use nomic-embed-text
 | `models` | list models |
 | `info`, `layers`, `layer N`, `tensors`, `vocab`, `template`, `stats` | same as the commands above, for the current model |
 | `analyze`, `slim`, `trace <prompt>`, `compare <model>`, `export` | same as above |
+| `graph [options]`, `node <id>` | the graph of the current model |
+| `cut <id>...`, `uncut <id>\|all`, `selection`, `impact` | build a cut selection and see its static impact |
+| `simulate [prompt] [--tokens N] [--corpus f]` | run the selection in memory (`&` for background) |
+| `sweep --corpus f [--level head --layer N]` | rank layers or heads by damage (`&` for background) |
+| `plan save <file>` | write the selection as a prune plan |
 | `jobs`, `job <id>`, `cancel <id>` | background jobs |
 | `web` | open the web interface on the same session |
 | `rescan` | look for models again |
 | `help`, `exit` | |
 
-Tab completes commands, model names, tensor names and token classes. History is kept
+Tab completes commands, model names, tensor names, token classes and graph node ids. History is kept
 between sessions. Long output is shown one page at a time.
 
 ## Exit codes

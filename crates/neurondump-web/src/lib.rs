@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 
 use neurondump_core::compare::compare;
 use neurondump_core::export::{render as export_render, Format, Table};
+use neurondump_core::graph::{GroupBy, Level, ViewOptions};
 use neurondump_core::inspect::{inspect, tensor_rows, InspectOptions, InspectReport};
 use neurondump_core::stats::{tensor_stats, TensorStats};
 use neurondump_core::template::template_report;
@@ -77,7 +78,7 @@ impl IntoResponse for ApiError {
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
         let msg = format!("{e:#}");
-        let code = if msg.contains("unknown model id") || msg.contains("no model named") || msg.contains("no tensor") {
+        let code = if msg.contains("unknown model id") || msg.contains("no model named") || msg.contains("no tensor") || msg.contains("no node") {
             StatusCode::NOT_FOUND
         } else {
             StatusCode::BAD_REQUEST
@@ -175,6 +176,8 @@ fn serve_asset(path: &str) -> Response {
                 Some("js") => "text/javascript; charset=utf-8",
                 Some("css") => "text/css; charset=utf-8",
                 Some("svg") => "image/svg+xml",
+                Some("wasm") => "application/wasm",
+                Some("json") => "application/json",
                 _ => "application/octet-stream",
             };
             ([(header::CONTENT_TYPE, mime)], f.data.into_owned()).into_response()
@@ -369,7 +372,8 @@ async fn create_job(State(s): St, Json(req): Json<JobRequest>) -> ApiResult<(Sta
             o.remove("perplexity_corpus");
         }
     }
-    if kind == JobKind::Trace {
+    if matches!(kind, JobKind::Trace | JobKind::Ablate | JobKind::Sweep) {
+        // Corpus files are paths on the server's disk; the web UI sends texts instead.
         if let Some(o) = params.as_object_mut() {
             o.remove("corpus_file");
         }
@@ -500,6 +504,86 @@ async fn export(State(s): St, Path(id): Path<String>, Query(q): Query<ExportQuer
     Ok(resp)
 }
 
+// --- graph / ablation ---------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct GraphQuery {
+    level: Option<String>,
+    group_by: Option<String>,
+    /// Comma-separated node ids to expand (lazy fine level).
+    expand: Option<String>,
+}
+
+async fn graph(State(s): St, Path(id): Path<String>, Query(q): Query<GraphQuery>) -> ApiResult<Json<Value>> {
+    let v = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        let g = s.app.graph(&m)?;
+        let level = match q.level.as_deref().filter(|l| !l.is_empty()) {
+            Some(l) => Level::parse(l).ok_or_else(|| anyhow::anyhow!("level must be section, layer, block, tensor or fine"))?,
+            None => Level::Layer,
+        };
+        let group_by = match q.group_by.as_deref().filter(|l| !l.is_empty()) {
+            Some(l) => GroupBy::parse(l).ok_or_else(|| anyhow::anyhow!("group_by must be section, layer, block, quant, kind or importance"))?,
+            None => GroupBy::Section,
+        };
+        let expand: Vec<String> = q.expand.unwrap_or_default().split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect();
+        Ok(serde_json::to_value(g.view(&ViewOptions { level, group_by, expand }))?)
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+async fn graph_node(State(s): St, Path((id, node)): Path<(String, String)>) -> ApiResult<Json<Value>> {
+    let v = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        let g = s.app.graph(&m)?;
+        let rid = g.resolve_id(&node).ok_or_else(|| anyhow::anyhow!("no node {node:?}"))?;
+        let d = g.detail(&rid).ok_or_else(|| anyhow::anyhow!("no node {node:?}"))?;
+        Ok(serde_json::to_value(d)?)
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct CutBody {
+    #[serde(default)]
+    cut: Vec<String>,
+    #[serde(default)]
+    force: bool,
+    /// plan-from-ablation: use a finished sweep job instead of `cut`.
+    #[serde(default)]
+    sweep_job: Option<String>,
+    /// plan-from-ablation with a sweep: number of least damaging entries.
+    #[serde(default)]
+    top: Option<usize>,
+}
+
+async fn impact(State(s): St, Path(id): Path<String>, Json(b): Json<CutBody>) -> ApiResult<Json<Value>> {
+    let v = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        Ok(serde_json::to_value(s.app.impact(&m, &b.cut, b.force)?)?)
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+async fn plan_from_ablation(State(s): St, Path(id): Path<String>, Json(b): Json<CutBody>) -> ApiResult<Json<Value>> {
+    let v = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        if let Some(job) = &b.sweep_job {
+            let r = s.app.jobs.result(job).ok_or_else(|| anyhow::anyhow!("no finished sweep job {job:?}"))?;
+            let sw: neurondump_core::trace::SweepReport = serde_json::from_value(r).map_err(|_| anyhow::anyhow!("job {job:?} is not a sweep"))?;
+            let (plan, impact) = s.app.plan_from_sweep(&m, &sw, b.top.unwrap_or(1), b.force)?;
+            return Ok(json!({ "plan": plan, "impact": impact }));
+        }
+        let plan = s.app.plan_from_cut(&m, &b.cut, b.force)?;
+        Ok(json!({ "plan": plan }))
+    })
+    .await?;
+    Ok(Json(v))
+}
+
 /// The full router (exposed for tests and embedding).
 pub fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
@@ -513,6 +597,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/models/{id}/layers", get(layers))
         .route("/models/{id}/template", get(template))
         .route("/models/{id}/tensors/{name}/stats", get(one_tensor_stats))
+        .route("/models/{id}/graph", get(graph))
+        .route("/models/{id}/nodes/{node}", get(graph_node))
+        .route("/models/{id}/impact", post(impact))
+        .route("/models/{id}/plan-from-ablation", post(plan_from_ablation))
         .route("/jobs", post(create_job).get(list_jobs))
         .route("/jobs/{id}", get(get_job))
         .route("/jobs/{id}", delete(cancel_job))

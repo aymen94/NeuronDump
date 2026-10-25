@@ -5,6 +5,8 @@ Look inside any local LLM, find the parts it doesn't need, and make it smaller.
 NeuronDump reads **GGUF** model files (the format used by **Ollama** and **llama.cpp**),
 shows what's inside them, and can write a smaller version that still runs.
 
+![The model graph of qwen3.8:27b in the web interface (3D city view)](images/model_graph.png)
+
 ## What it does
 
 | Command | You get |
@@ -77,7 +79,7 @@ Tokenizer    gpt2 (pre: llama-bpe), 128256 tokens, 280147 merges
 ```
 
 Next: [how it works](how-it-works.md), step by step, or
-[what's inside real models](models.md) for findings on DeepSeek-R1 and Qwen 3.8.
+[what's inside real models](models.md) for Qwen3 8B compared with DeepSeek-R1, and Qwen 3.8.
 
 ## Citing
 
@@ -88,7 +90,7 @@ If you use NeuronDump in academic work, please cite the repository:
   author  = {Aymen},
   title   = {NeuronDump: inspecting, analyzing and slimming GGUF language models},
   year    = {2026},
-  version = {0.1.1},
+  version = {0.1.2},
   url     = {https://github.com/aymen94/NeuronDump},
   license = {MIT}
 }

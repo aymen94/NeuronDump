@@ -37,6 +37,11 @@ pub enum CandidateKind {
     QuantHeadroom,
     UnusedProjector,
     LargeMetadata,
+    /// Weights set to zero in place (ablation): same shapes, same size.
+    ZeroWeights,
+    /// Optional tensors dropped from the file (MTP head, in-file vision encoder).
+    DropTensors,
+    StripTemplate,
 }
 
 impl CandidateKind {
@@ -52,6 +57,9 @@ impl CandidateKind {
             CandidateKind::QuantHeadroom => "quant_headroom",
             CandidateKind::UnusedProjector => "unused_projector",
             CandidateKind::LargeMetadata => "large_metadata",
+            CandidateKind::ZeroWeights => "zero_weights",
+            CandidateKind::DropTensors => "drop_tensors",
+            CandidateKind::StripTemplate => "strip_template",
         }
     }
 
@@ -67,6 +75,9 @@ impl CandidateKind {
             CandidateKind::LowNormHeads => "heads",
             CandidateKind::LowNormNeurons => "neurons",
             CandidateKind::LowNormExperts => "experts",
+            CandidateKind::ZeroWeights => "zero",
+            CandidateKind::DropTensors => "drop",
+            CandidateKind::StripTemplate => "template",
         }
     }
 }

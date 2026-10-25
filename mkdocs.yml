@@ -14,6 +14,7 @@ nav:
       - Getting started: getting-started.md
       - Analyze and slim: analyze-and-slim.md
       - Trace: trace.md
+      - Graph and ablation: graph-and-ablation.md
       - Web interface: web.md
   - Reference:
       - CLI reference: cli.md

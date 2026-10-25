@@ -13,6 +13,8 @@ NeuronDump web UI: http://127.0.0.1:7878/?token=8cb862630b8fe923526d6c10f055950c
 
 Open that link. The token is new at every start, and the page doesn't work without it.
 
+![Models page: every local model with its architecture, size and id](images/home.png)
+
 ## Pages
 
 | Page | What you see |
@@ -22,6 +24,7 @@ Open that link. The token is new at every start, and the page doesn't work witho
 | vocab | search the vocabulary, filter by class / language, page through 100k+ tokens |
 | tensors | filter and sort tensors; click one to see its statistics |
 | layers | a colored map of the layers (attention, linear, MoE); click a layer for its tensors |
+| graph | the model as an interactive 3D (tower, city, force) or 2D graph: expand nodes, see what they contain, cut them, simulate, sweep, save a plan (see [Graph and ablation](graph-and-ablation.md)) |
 | template | the chat template as a collapsible tree |
 | stats | statistics and histogram for one tensor, or the whole model as a job |
 | analyze | run an analysis, tick the candidates you want, press **Slim** |
@@ -29,7 +32,37 @@ Open that link. The token is new at every start, and the page doesn't work witho
 | Compare | tick two or more models |
 | Jobs | running and finished jobs, live progress, cancel |
 
-Long work (stats, analyze, slim, trace) runs as a **job** in the background, so the page stays usable.
+## Screenshots
+
+**Overview** of qwen3.8:27b: summary cards, hyperparameters, components, tensor types, layer kinds,
+tokenizer, Ollama settings and the vision projector.
+
+![Model overview page](images/model_overview.png)
+
+**vocab**: searching qwen3:8b's 151,936 tokens for "Hello", with matches highlighted.
+
+![Vocabulary search](images/model_vocab.png)
+
+**graph**: qwen3.8:27b in the 3D city view. Layer 64 (the next-token prediction layer) is selected,
+and the side panel shows what it contains and that removing it is `risky`.
+
+![Graph page, 3D city view with a layer selected](images/model_graph.png)
+
+The same model at section level, grouped by layer. The Body section holds 65 layers; the vision
+projector (green, `safe`) is a separate file.
+
+![Graph page, section level](images/model_graph2.png)
+
+**trace**: qwen3:8b on "The capital of Italy is". The last column is the logit lens: what the model
+would answer if it stopped at that layer. The final prediction is " Rome" 0.825.
+
+![Trace page with the logit lens](images/model_trace.png)
+
+**Compare**: qwen3.8:27b next to qwen3:8b, with their vocabulary overlap and the metadata that differs.
+
+![Compare page](images/compare.png)
+
+Long work (stats, analyze, slim, trace, ablate, sweep) runs as a **job** in the background, so the page stays usable.
 A number next to **Jobs** in the header shows how many are running.
 
 ## Search and shortcuts
@@ -72,6 +105,10 @@ curl -H "$H" $B/api/models
 | GET | `/api/models/{id}/layers` | layers |
 | GET | `/api/models/{id}/template` | template trees |
 | GET | `/api/models/{id}/tensors/{name}/stats` | statistics of one tensor |
+| GET | `/api/models/{id}/graph?level=&group_by=&expand=` | the graph; `expand` (comma-separated ids) loads heads / neurons / experts on demand |
+| GET | `/api/models/{id}/nodes/{node_id}` | one node: contents, stats, connections |
+| POST | `/api/models/{id}/impact` | static impact: `{"cut":["layer.7"],"force":false}` |
+| POST | `/api/models/{id}/plan-from-ablation` | prune plan from `{"cut":[…]}` or `{"sweep_job":"<id>","top":2}` |
 | POST | `/api/jobs` | start a job: `{"kind":"stats","model":"<id>","params":{}}` → `202 {"id":…}` |
 | GET | `/api/jobs` | all jobs |
 | GET | `/api/jobs/{id}` | one job |
@@ -82,5 +119,5 @@ curl -H "$H" $B/api/models
 | GET | `/api/compare?models=a,b` | comparison |
 | GET | `/api/export/{id}?format=json\|csv\|ndjson&table=` | download |
 
-Job kinds: `inspect`, `stats`, `analyze`, `slim`, `trace`. The web API doesn't accept file
-paths, so pass corpus text as `corpus_text` for analyze and as `corpus` (a list) for trace.
+Job kinds: `inspect`, `stats`, `analyze`, `slim`, `trace`, `ablate`, `sweep`. The web API doesn't accept file
+paths, so pass corpus text as `corpus_text` for analyze and as `corpus` (a list) for trace, ablate and sweep.

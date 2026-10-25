@@ -18,6 +18,7 @@ use neurondump_core::analyze::PrunePlan;
 use neurondump_core::compare::compare;
 use neurondump_core::config::{config_path, Config, UiMode};
 use neurondump_core::export::{render as export_render, Format, Table};
+use neurondump_core::graph::{GroupBy, Level, ViewOptions};
 use neurondump_core::inspect::{inspect, InspectOptions, InspectReport};
 use neurondump_core::slim::SlimReport;
 use neurondump_core::stats::StatsReport;
@@ -240,6 +241,79 @@ pub enum Cmd {
     },
     /// List background jobs (REPL / web sessions).
     Jobs,
+    /// Structural graph: sections, layers, blocks, tensors, heads/neurons/experts.
+    Graph {
+        model: String,
+        /// section, layer, block, tensor, fine
+        #[arg(long, default_value = "layer")]
+        level: String,
+        /// section, layer, block, quant, kind, importance
+        #[arg(long, default_value = "section")]
+        group_by: String,
+        /// tree, json, dot, mermaid
+        #[arg(long, default_value = "tree")]
+        format: String,
+        /// Node ids to expand (comma-separated), e.g. layer.7,layer.7.attn
+        #[arg(long, value_delimiter = ',')]
+        expand: Vec<String>,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// What a graph node contains, its stats, connections and removable flag.
+    Node { model: String, id: String },
+    /// "What if I cut this?": static impact, then a simulated run (feature `trace`).
+    Ablate {
+        model: String,
+        /// Node ids (comma-separated): layer.7, layer.7.attn, layer.7.attn.head.3, token_embd, vocab:100-200, ...
+        #[arg(long, value_delimiter = ',', required = true)]
+        cut: Vec<String>,
+        /// Static impact only (no inference).
+        #[arg(long = "static")]
+        static_only: bool,
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Texts separated by blank lines: perplexity and mean KL.
+        #[arg(long)]
+        corpus: Option<PathBuf>,
+        /// Greedy tokens to generate, baseline vs ablated.
+        #[arg(long, default_value_t = 16)]
+        tokens: usize,
+        /// Allow `breaks_model` cuts.
+        #[arg(long)]
+        force: bool,
+        /// Write the cut as a prune plan for `slim`.
+        #[arg(long)]
+        save_plan: Option<PathBuf>,
+        #[arg(long)]
+        max_tokens: Option<usize>,
+    },
+    /// Ablate each layer (or head / expert) one at a time and rank them by damage.
+    Sweep {
+        model: String,
+        /// layer, head, expert
+        #[arg(long, default_value = "layer")]
+        level: String,
+        /// Layer for --level head / expert.
+        #[arg(long)]
+        layer: Option<u32>,
+        /// Texts separated by blank lines.
+        #[arg(long)]
+        corpus: PathBuf,
+        /// Where to write the sweep JSON (default <model>.sweep.json).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Tokens per sample (default 64).
+        #[arg(long)]
+        max_tokens: Option<usize>,
+        /// Also write a prune plan with the --top least damaging entries.
+        #[arg(long)]
+        save_plan: Option<PathBuf>,
+        #[arg(long, default_value_t = 1)]
+        top: usize,
+        /// Allow `breaks_model` plans.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -513,6 +587,113 @@ pub fn run_command(ctx: &Ctx, cmd: &Cmd) -> Result<String> {
             } else {
                 Ok(render::jobs(&jobs))
             }
+        }
+        Cmd::Graph { model, level, group_by, format, expand, out } => {
+            let m = app.open(model)?;
+            let g = app.graph(&m)?;
+            let level = Level::parse(level).ok_or_else(|| anyhow::anyhow!("--level must be section, layer, block, tensor or fine"))?;
+            let group_by = GroupBy::parse(group_by).ok_or_else(|| anyhow::anyhow!("--group-by must be section, layer, block, quant, kind or importance"))?;
+            for e in expand {
+                if g.resolve_id(e).is_none() {
+                    bail!("unknown node {e:?} (ids are shown after # in `graph`)");
+                }
+            }
+            let v = g.view(&ViewOptions { level, group_by, expand: expand.clone() });
+            let text = match (format.as_str(), json) {
+                ("json", _) | (_, true) => to_json(&v)?,
+                ("tree", _) => v.to_tree(),
+                ("dot", _) => v.to_dot(),
+                ("mermaid", _) => v.to_mermaid(),
+                (other, _) => bail!("unknown --format {other:?} (tree, json, dot, mermaid)"),
+            };
+            match out {
+                Some(p) => {
+                    std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
+                    Ok(format!("wrote {} ({} nodes, {} edges)\n", p.display(), v.nodes.len(), v.edges.len()))
+                }
+                None => Ok(text),
+            }
+        }
+        Cmd::Node { model, id } => {
+            let m = app.open(model)?;
+            let g = app.graph(&m)?;
+            let rid = g.resolve_id(id).ok_or_else(|| anyhow::anyhow!("unknown node {id:?} (try `graph {model} --level tensor`)"))?;
+            let d = g.detail(&rid).ok_or_else(|| anyhow::anyhow!("unknown node {id:?}"))?;
+            if json {
+                to_json(&d)
+            } else {
+                Ok(render::node(&d))
+            }
+        }
+        Cmd::Ablate { model, cut, static_only, prompt, corpus, tokens, force, save_plan, max_tokens } => {
+            let m = app.open(model)?;
+            let impact = app.impact(&m, cut, *force)?;
+            let mut s = render::impact(&impact);
+            if impact.cut.is_empty() {
+                bail!("{s}nothing to cut: unknown id(s) {}", impact.unknown.join(", "));
+            }
+            if impact.refused {
+                if json {
+                    write_stdout(&to_json(&json!({ "impact": impact }))?);
+                } else {
+                    write_stdout(&s);
+                }
+                bail!("refused: cutting this is `breaks_model`; pass --force to simulate or plan it anyway");
+            }
+            let mut plan_path = None;
+            if let Some(p) = save_plan {
+                let plan = app.plan_from_cut(&m, cut, *force)?;
+                std::fs::write(p, serde_json::to_vec_pretty(&plan)?).with_context(|| format!("writing {}", p.display()))?;
+                s.push_str(&format!("plan written to {} (apply with `slim {model} --plan {} --out <name>.gguf`)\n", p.display(), p.display()));
+                plan_path = Some(p.clone());
+            }
+            let mut simulation = None;
+            if !*static_only {
+                if impact.simulation_supported {
+                    let params = json!({
+                        "cut": cut, "force": force, "prompt": prompt, "corpus_file": corpus, "tokens": tokens, "max_tokens": max_tokens,
+                    });
+                    let v = ctx.run_job(JobKind::Ablate, model, params)?;
+                    let r: neurondump_core::ablate::AblateResult = serde_json::from_value(v)?;
+                    if let Some(sim) = &r.simulation {
+                        s.push('\n');
+                        s.push_str(&render::simulation(sim));
+                    }
+                    simulation = r.simulation;
+                } else {
+                    s.push_str("(no simulation: see the notes above; showing static impact only)\n");
+                }
+            }
+            if json {
+                return to_json(&json!({ "impact": impact, "simulation": simulation, "plan": plan_path }));
+            }
+            Ok(s)
+        }
+        Cmd::Sweep { model, level, layer, corpus, out, max_tokens, save_plan, top, force } => {
+            let params = json!({ "level": level, "layer": layer, "corpus_file": corpus, "max_tokens": max_tokens });
+            let v = ctx.run_job(JobKind::Sweep, model, params)?;
+            let r: neurondump_core::trace::SweepReport = serde_json::from_value(v.clone())?;
+            let out = out.clone().unwrap_or_else(|| PathBuf::from(format!("{}.sweep.json", file_safe(&r.model))));
+            std::fs::write(&out, serde_json::to_vec_pretty(&v)?).with_context(|| format!("writing {}", out.display()))?;
+            let mut s = render::sweep(&r);
+            s.push_str(&format!("sweep written to {}\n", out.display()));
+            if let Some(p) = save_plan {
+                let m = app.open(model)?;
+                let (plan, impact) = app.plan_from_sweep(&m, &r, *top, *force)?;
+                std::fs::write(p, serde_json::to_vec_pretty(&plan)?).with_context(|| format!("writing {}", p.display()))?;
+                s.push_str(&format!(
+                    "plan with the {top} least damaging {}(s) written to {} — {} → {} ({})\n",
+                    r.level,
+                    p.display(),
+                    neurondump_core::util::human_bytes(impact.original_size),
+                    neurondump_core::util::human_bytes(impact.new_size),
+                    impact.verdict.as_str()
+                ));
+            }
+            if json {
+                return to_json(&v);
+            }
+            Ok(s)
         }
     }
 }

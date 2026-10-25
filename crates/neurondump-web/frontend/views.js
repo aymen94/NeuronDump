@@ -17,11 +17,12 @@ function jobStatus(j) {
 }
 
 /** Runs a job with an inline progress line; resolves to the parsed result or throws. */
-async function jobWithProgress(container, kind, model, params) {
+export async function jobWithProgress(container, kind, model, params, onJob) {
   const line = el('div', { class: 'row' }, 'starting…');
   container.replaceChildren(line);
   let cancelBtn = null;
   const j = await runJob(kind, model, params, (j) => {
+    if (onJob) onJob(j);
     if (!cancelBtn) cancelBtn = el('button', { onclick: () => api(`/jobs/${j.id}`, { method: 'DELETE' }) }, 'cancel');
     line.replaceChildren(jobStatus(j), j.status === 'running' || j.status === 'queued' ? cancelBtn : '');
   });
@@ -300,7 +301,7 @@ export function analyze(id) {
     out);
 }
 
-function planView(id, plan) {
+export function planView(id, plan) {
   const boxes = new Map();
   const outName = el('input', { value: 'slim.gguf', size: 24 });
   const result = el('div', {});
@@ -344,7 +345,7 @@ function planView(id, plan) {
 
 export async function trace(id) {
   const info = await api('/info');
-  const prompt = el('input', { size: 60, value: 'The capital of France is' });
+  const prompt = el('input', { size: 60, value: 'The capital of Italy is' });
   const corpus = el('textarea', { rows: 4, cols: 80, placeholder: 'Corpus mode: texts separated by blank lines (aggregated)' });
   const out = el('div', {});
   const run = async () => {
@@ -466,3 +467,5 @@ export async function search(_, params) {
     groups.length ? groups : el('p', { class: 'muted' }, 'No results.'),
     !modelId ? el('p', { class: 'muted' }, 'Tip: open a model first, or choose "inside …" above, to also search its tokens, tensors and metadata.') : '');
 }
+
+export { graph } from './graph.js';

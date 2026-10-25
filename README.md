@@ -8,6 +8,8 @@ It can then remove unused parts and write a smaller GGUF that still runs in Olla
 
 It works with any model. It reads each file's own metadata; nothing is hard-coded per model.
 
+![The model graph of qwen3.8:27b in the web interface (3D city view)](docs/images/model_graph.png)
+
 ## Install
 
 **Download:** ready-made Windows and Linux builds are on the
@@ -66,7 +68,8 @@ Run `neurondump` with no arguments to choose between the interactive CLI and the
 | [Web interface](docs/web.md) | the browser UI and the HTTP API |
 | [Analyze and slim](docs/analyze-and-slim.md) | making models smaller, safely |
 | [Trace](docs/trace.md) | running a model and looking at each layer |
-| [What's inside real models](docs/models.md) | findings on DeepSeek-R1 and Qwen 3.8 |
+| [Graph and ablation](docs/graph-and-ablation.md) | the model as a graph; what happens if you cut a part |
+| [What's inside real models](docs/models.md) | Qwen3 8B vs DeepSeek-R1, and Qwen 3.8 |
 | [Building](docs/building.md) | build options and Windows notes |
 | [Manual test plan](https://github.com/aymen94/NeuronDump/blob/main/TEST.md) | step-by-step checks |
 

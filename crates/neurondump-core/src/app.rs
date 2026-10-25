@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::ablate::{self, AblateResult, StaticImpact};
 use crate::analyze::{analyze, AnalyzeOptions, PrunePlan};
+use crate::graph::{GraphInputs, ModelGraph};
 use crate::config::Config;
 use crate::discovery::{DiscoveryOptions, Library, ModelEntry};
 use crate::inspect::{inspect, InspectOptions};
@@ -16,7 +18,7 @@ use crate::model::ModelHandle;
 use crate::slim::{slim, SlimOptions};
 use crate::stats::{compute_stats, StatsOptions, StatsReport};
 use crate::tokenizer::Vocab;
-use crate::trace::{trace, TraceReport, TraceRequest};
+use crate::trace::{trace, SimRequest, SweepReport, SweepRequest, TraceReport, TraceRequest};
 use crate::util::{fnv1a, now_unix, Cancelled, Progress};
 
 pub struct App {
@@ -24,7 +26,35 @@ pub struct App {
     library: RwLock<Library>,
     handles: Mutex<HashMap<String, Arc<ModelHandle>>>,
     vocabs: Mutex<HashMap<String, Arc<Vocab>>>,
+    graphs: Mutex<HashMap<String, Arc<ModelGraph>>>,
     pub jobs: JobManager,
+}
+
+/// Parameters of an `ablate` job.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AblateParams {
+    #[serde(default)]
+    pub cut: Vec<String>,
+    #[serde(default)]
+    pub force: bool,
+    /// Static impact only (no inference).
+    #[serde(default, rename = "static")]
+    pub static_only: bool,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub prompts: Vec<String>,
+    #[serde(default)]
+    pub corpus: Vec<String>,
+    #[serde(default)]
+    pub corpus_file: Option<PathBuf>,
+    /// Greedy tokens to generate per prompt.
+    #[serde(default)]
+    pub tokens: Option<usize>,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
 }
 
 /// On-disk result cache keyed by model digest + job kind + parameters.
@@ -39,7 +69,14 @@ impl App {
         discovery.extra_dirs.extend(config.scan_dirs.iter().cloned());
         let library = Library::discover(discovery);
         let jobs = JobManager::new(config.output_dir.join("jobs"));
-        Arc::new(Self { config, library: RwLock::new(library), handles: Mutex::new(HashMap::new()), vocabs: Mutex::new(HashMap::new()), jobs })
+        Arc::new(Self {
+            config,
+            library: RwLock::new(library),
+            handles: Mutex::new(HashMap::new()),
+            vocabs: Mutex::new(HashMap::new()),
+            graphs: Mutex::new(HashMap::new()),
+            jobs,
+        })
     }
 
     pub fn library(&self) -> RwLockReadGuard<'_, Library> {
@@ -50,6 +87,7 @@ impl App {
         self.library.write().unwrap().rescan();
         self.handles.lock().unwrap().clear();
         self.vocabs.lock().unwrap().clear();
+        self.graphs.lock().unwrap().clear();
     }
 
     pub fn refresh_if_changed(&self) -> bool {
@@ -57,6 +95,7 @@ impl App {
         if changed {
             self.handles.lock().unwrap().clear();
             self.vocabs.lock().unwrap().clear();
+            self.graphs.lock().unwrap().clear();
         }
         changed
     }
@@ -129,12 +168,71 @@ impl App {
         self.cache_get(m, "trace-corpus-latest", &Value::Null).and_then(|v| serde_json::from_value(v).ok())
     }
 
+    /// Structural graph with cached measurements (stats, corpus trace, sweeps); built once
+    /// per model and rebuilt after a job that adds measurements.
+    pub fn graph(&self, m: &ModelHandle) -> Result<Arc<ModelGraph>> {
+        if let Some(g) = self.graphs.lock().unwrap().get(&m.entry.id) {
+            return Ok(g.clone());
+        }
+        let vocab = self.vocab(m).ok();
+        let stats = self.stats(m, false, &crate::util::NoProgress)?;
+        let trace = self.latest_corpus_trace(m);
+        let mut sweeps = Vec::new();
+        if let Some(sw) = self.latest_sweep(m, "layer", None) {
+            sweeps.push(ablate::sweep_importance(&sw));
+        }
+        let n_layers = crate::arch::analyze_architecture(&m.gguf).layers.len() as u32;
+        for l in 0..n_layers {
+            if let Some(sw) = self.latest_sweep(m, "head", Some(l)) {
+                sweeps.push(ablate::sweep_importance(&sw));
+            }
+        }
+        let inputs = GraphInputs { stats: stats.as_ref(), trace: trace.as_ref(), sweeps };
+        let g = Arc::new(ModelGraph::build(m, vocab.as_deref(), &inputs));
+        self.graphs.lock().unwrap().insert(m.entry.id.clone(), g.clone());
+        Ok(g)
+    }
+
+    fn invalidate_graph(&self, m: &ModelHandle) {
+        self.graphs.lock().unwrap().remove(&m.entry.id);
+    }
+
+    fn sweep_key(level: &str, layer: Option<u32>) -> Value {
+        serde_json::json!({ "level": if level.starts_with("head") { "head" } else { "layer" }, "layer": layer })
+    }
+
+    /// Latest sweep for a level (and layer, for head sweeps).
+    pub fn latest_sweep(&self, m: &ModelHandle, level: &str, layer: Option<u32>) -> Option<SweepReport> {
+        self.cache_get(m, "sweep-latest", &Self::sweep_key(level, layer)).and_then(|v| serde_json::from_value(v).ok())
+    }
+
+    /// Static impact of cutting these node ids (instant, any architecture).
+    pub fn impact(&self, m: &ModelHandle, cut: &[String], force: bool) -> Result<StaticImpact> {
+        let g = self.graph(m)?;
+        let v = self.vocab(m).ok();
+        Ok(ablate::static_impact(m, &g, v.as_deref(), cut, force))
+    }
+
+    /// Prune plan for a cut (`slim` can apply it).
+    pub fn plan_from_cut(&self, m: &ModelHandle, cut: &[String], force: bool) -> Result<PrunePlan> {
+        let g = self.graph(m)?;
+        let i = self.impact(m, cut, force)?;
+        ablate::plan_from_impact(m, &g, &i, force)
+    }
+
+    /// Prune plan from the `top` least damaging entries of a sweep.
+    pub fn plan_from_sweep(&self, m: &ModelHandle, sw: &SweepReport, top: usize, force: bool) -> Result<(PrunePlan, StaticImpact)> {
+        let g = self.graph(m)?;
+        let v = self.vocab(m).ok();
+        ablate::plan_from_sweep(m, &g, v.as_deref(), sw, top, force)
+    }
+
     /// Runs a job synchronously (CLI) — the job system calls the same function.
     /// Returns the result and whether it came from the cache.
     pub fn run(&self, kind: JobKind, model: &str, params: Value, p: &dyn Progress) -> Result<(Value, bool)> {
         let m = self.open(model)?;
         let params = if params.is_null() { Value::Object(Default::default()) } else { params };
-        let cacheable = matches!(kind, JobKind::Inspect | JobKind::Stats | JobKind::Trace);
+        let cacheable = matches!(kind, JobKind::Inspect | JobKind::Stats | JobKind::Trace | JobKind::Ablate | JobKind::Sweep);
         if cacheable {
             if let Some(v) = self.cache_get(&m, kind.as_str(), &params) {
                 p.set(100.0, "cached");
@@ -172,10 +270,47 @@ impl App {
                 let r = trace(&m, &o, p)?;
                 if r.samples > 1 {
                     self.cache_put(&m, "trace-corpus-latest", &Value::Null, &serde_json::to_value(&r)?);
+                    self.invalidate_graph(&m);
                 }
                 serde_json::to_value(r)?
             }
+            JobKind::Ablate => {
+                let o: AblateParams = serde_json::from_value(params.clone()).context("ablate params")?;
+                p.set(1.0, "static impact");
+                let impact = self.impact(&m, &o.cut, o.force)?;
+                let simulation = if o.static_only {
+                    None
+                } else {
+                    let mut corpus = o.corpus.clone();
+                    if let Some(f) = &o.corpus_file {
+                        corpus.extend(crate::trace::read_corpus(f)?);
+                    }
+                    let mut prompts = o.prompts.clone();
+                    prompts.extend(o.prompt.clone());
+                    let req = SimRequest {
+                        prompts,
+                        corpus,
+                        gen_tokens: o.tokens.unwrap_or(16),
+                        top_k: o.top_k.unwrap_or(5),
+                        max_tokens: o.max_tokens.unwrap_or(128),
+                        ..Default::default()
+                    };
+                    Some(ablate::simulate(&m, &impact, req, p)?)
+                };
+                serde_json::to_value(AblateResult { impact, simulation })?
+            }
+            JobKind::Sweep => {
+                let o: SweepRequest = serde_json::from_value(params.clone()).context("sweep params")?;
+                let g = self.graph(&m)?;
+                let r = ablate::sweep(&m, &g, o, p)?;
+                self.cache_put(&m, "sweep-latest", &Self::sweep_key(&r.level, r.layer), &serde_json::to_value(&r)?);
+                self.invalidate_graph(&m);
+                serde_json::to_value(r)?
+            }
         };
+        if matches!(kind, JobKind::Stats | JobKind::Inspect) {
+            self.invalidate_graph(&m);
+        }
         if cacheable {
             self.cache_put(&m, kind.as_str(), &params, &v);
         }

@@ -4,7 +4,7 @@ import { api, getToken } from './api.js';
 import { el, errorBox, store } from './ui.js';
 import * as views from './views.js';
 
-const MODEL_VIEWS = ['overview', 'vocab', 'tensors', 'layers', 'template', 'stats', 'analyze', 'trace'];
+const MODEL_VIEWS = ['overview', 'vocab', 'tensors', 'layers', 'graph', 'template', 'stats', 'analyze', 'trace'];
 let current = null;
 let currentModel = '';
 const names = new Map();

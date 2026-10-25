@@ -119,7 +119,7 @@ neurondump                   # asks: CLI or web
 ```
 
 PowerShell notes:
-- Put text with spaces or symbols in **single quotes**: `--prompt 'The capital of France is'`.
+- Put text with spaces or symbols in **single quotes**: `--prompt 'The capital of Italy is'`.
 - Environment variables: `$env:NEURONDUMP_UI = "web"`, `$env:OLLAMA_MODELS = "D:\ollama\models"`.
 - Settings are saved in `%APPDATA%\neurondump\config.toml`, and results in `%USERPROFILE%\neurondump\`.
 

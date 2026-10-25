@@ -113,7 +113,7 @@ holding `nextn.*` roles. In `tensors --layer 3 --sort size`, `ffn_down`, `ffn_ga
 llama.cpp, and template decision trees.
 
 ```sh
-nd vocab llama3.2:1b --search Paris --limit 5
+nd vocab llama3.2:1b --search Rome --limit 5
 nd vocab llama3.2:1b --class code --lang rust --limit 10
 nd vocab llama3.2:1b --class reserved --limit 3
 nd vocab llama3.2:1b --search '^ fn$' --regex
@@ -200,7 +200,7 @@ help
 info
 layers
 layer 3
-vocab Paris --limit 5
+vocab Rome --limit 5
 vocab --class special
 tensors --sort size --limit 5
 template
@@ -210,7 +210,7 @@ job <id from jobs>
 use nomic-embed-text
 compare llama3.2:1b
 export --format csv --table layers
-trace The capital of France is
+trace The capital of Italy is
 web
 exit
 ```
@@ -221,6 +221,28 @@ Also try Tab completion: `us<Tab>`, `use ll<Tab>`, `vocab --class sp<Tab>`, `sta
 `jobs` shows its progress; `job <id>` renders the stats tables. Long outputs page with
 `-- more (50/…) Enter: next, q: quit --`. `web` prints a URL with `?token=` and opens the browser
 while the REPL keeps working. A piped REPL (`printf 'info\nexit\n' | nd cli`) runs without prompting.
+
+Graph and ablation commands (Phase 10–12) in the same REPL:
+```
+use llama3.2:1b
+graph --level section
+node L7
+cut layer.7 layer.7.attn.head.3
+selection
+impact
+simulate The capital of Italy is --tokens 4
+simulate &
+plan save C:/Users/<you>/llama-cut.plan.json
+uncut all
+sweep --level head --layer 7 --corpus /tmp/corpus5.txt &
+```
+Tab completes node ids after `node`, `cut`, `uncut` and `--expand` (type `layer.7.` to get
+its heads and neuron buckets). **Expected:** `cut` prints a one-line summary
+(`60.8M params, 1.23 GiB -> 1.17 GiB, verdict risky`). `impact` prints the full static impact, with
+`ignored layer.7.attn.head.3: an ancestor is already cut`. `simulate &` starts an `ablate-…` job.
+`job <id>` renders the impact and the simulation. `cut nope` → `unknown node "nope"`. `use` clears the selection.
+The REPL is a native program: in piped input, give `plan save` a Windows path (a `/tmp/...` path fails with
+`writing /tmp/...: The system cannot find the path specified`).
 
 **Edge cases:** an unknown command → `unknown command`; `use nope` → did-you-mean error;
 `cancel bogus` → `no running job`; Ctrl-C at the prompt does not exit; Ctrl-D exits.
@@ -245,7 +267,7 @@ curl -s -H "$H" $B/api/info
 curl -s -H "$H" $B/api/models | python -m json.tool | head -20
 curl -s -X POST -H "$H" $B/api/models/rescan
 curl -s -H "$H" $B/api/models/17d2889ccc34 | head -c 400; echo
-curl -s -w "\n%{time_total}s\n" -H "$H" "$B/api/models/17d2889ccc34/vocab?q=paris&limit=5"
+curl -s -w "\n%{time_total}s\n" -H "$H" "$B/api/models/17d2889ccc34/vocab?q=rome&limit=5"
 curl -s -H "$H" "$B/api/models/17d2889ccc34/vocab?q=%5E%20fn%24&regex=true&class=code"
 curl -s -H "$H" "$B/api/models/17d2889ccc34/vocab?class=reserved&offset=100&limit=2"
 curl -s -H "$H" "$B/api/models/17d2889ccc34/tensors?layer=3&sort=size&limit=3"
@@ -286,7 +308,7 @@ A slim job with `"out":"../evil.gguf"` → 400 `output must be a plain file name
 ```sh
 curl -s -H "$H" "$B/api/search?q=qwen" | python -m json.tool | head -20                 # 5 models
 curl -s -H "$H" "$B/api/search?q=attn_q&model=17d2889ccc34" | python -c "import json,sys;print(json.load(sys.stdin)['totals'])"   # [0, 0, 16, 0]  (models, tokens, tensors, metadata)
-nd search paris --model llama3.2:1b
+nd search rome --model llama3.2:1b
 ```
 
 **UI (open the printed URL):** check each view:
@@ -302,7 +324,7 @@ nd search paris --model llama3.2:1b
 - Compare: tick 2+ models.
 - Jobs: live progress over SSE, cancel buttons, result links.
 - Opening `http://127.0.0.1:7878/` without `?token=` shows the "No session token" error.
-- Header search: press `/`, type `paris` on a model page, then Enter. You get grouped results with
+- Header search: press `/`, type `rome` on a model page, then Enter. You get grouped results with
   highlighted matches; a token result opens vocab with the query filled in. Typing on the results page updates them live.
 - Models page: the filter box narrows the list; clicking `size` sorts by size (click again to reverse).
 - Click an id → "Copied …" toast. The System / Light / Dark switch changes the theme (System is selected by default and follows the OS); the choice survives a reload.
@@ -339,7 +361,7 @@ Load in llama.cpp (this build uses `llama-completion` for one-shot prompts; `lla
 ```sh
 llama-completion -m ~/neurondump/slim/llama-vocab.gguf -p "The quick brown fox" -n 12 --temp 0 -no-cnv
 llama-completion -m "$(blob llama3.2:1b)" -p "The quick brown fox" -n 12 --temp 0 -no-cnv
-llama-completion -m ~/neurondump/slim/llama-15l.gguf -p "The capital of France is" -n 10 --temp 0 -no-cnv
+llama-completion -m ~/neurondump/slim/llama-15l.gguf -p "The capital of Italy is" -n 10 --temp 0 -no-cnv
 llama-cli -m ~/neurondump/slim/llama-noreserved.gguf          # interactive chat, type a question, Ctrl-C to quit
 llama-perplexity -m ~/neurondump/slim/llama-noreserved.gguf -f /tmp/corpus.txt -c 64
 ```
@@ -371,7 +393,7 @@ ollama rm llama-vocab llama-noreserved nomic-mini   # clean up
 - `low_norm_heads` → `Refused low_norm_heads: …non-uniform shapes…`, `Applied -`.
 - **Compare:** the original and `llama-vocab` both continue "jumps over the lazy dog." and then diverge
   (the slim model can only emit 570 tokens). The 15-layer model loads and generates, with visibly
-  worse quality (one test run answered "The capital of France is not Paris"). `llama-noreserved`
+  worse quality (`-p "The capital of Italy is"` continued " not a country that exists in the world of art"). `llama-noreserved`
   must be indistinguishable from the original. The Ollama runs reply normally, with the original
   template, stop tokens and parameters. `nomic-mini` returns a 768-dim embedding.
 
@@ -382,6 +404,10 @@ nd slim llama3.2:1b --plan /tmp/llama.prune.json --only vocab --out ../evil.gguf
 nd slim llama3.2:1b --plan /does/not/exist.json --out a.gguf
 echo '{}' > /tmp/bad.json && nd slim llama3.2:1b --plan /tmp/bad.json --out a.gguf  # invalid plan JSON
 ```
+Plans made from ablations (section 11–12) add three candidate kinds that `slim` applies:
+`zero_weights` (weights set to 0 in place, `Zeroed N tensor(s)`), `drop_tensors` and `strip_template`
+(no `TEMPLATE` in the Modelfile). Removing a next-n layer also decrements `nextn_predict_layers`.
+
 Hand-edit `/tmp/llama.prune.json` (set `"selected": true` on `reserved_tokens`) and run
 `slim` without `--only`: only that candidate is applied.
 
@@ -392,7 +418,7 @@ Hand-edit `/tmp/llama.prune.json` (set `"selected": true` on `reserved_tokens`) 
 **What to test:** per-layer internals, the logit lens, corpus aggregation, embedding contributions.
 
 ```sh
-nd trace llama3.2:1b --prompt "The capital of France is"
+nd trace llama3.2:1b --prompt "The capital of Italy is"
 nd trace qwen2.5-coder:7b --prompt "def fibonacci(n):"
 nd trace qwen3:8b --prompt "The opposite of hot is"
 nd trace nomic-embed-text --prompt "search_query: what is rust?"
@@ -403,9 +429,9 @@ nd --json trace llama3.2:1b --prompt "Hi" --top-k 3 | python -c "import json,sys
 ```
 
 **Expected:** for llama3.2:1b, 6 tokens starting with `<|begin_of_text|>`. The logit lens is noise for
-layers 0–10 and **" Paris" ≈ 0.84 from layer 11** onward. Final `next token: " Paris" 0.72`.
-cos(in,out) rises from ≈0.3 (layer 0) to ≈0.93 (layer 12) and drops in the last layer. Layer 1 has one
-huge neuron (index 1417, ≈190). Runtime is about 3–4 s.
+layers 0–10. **" Rome" appears at layer 11 (0.35)**, reaches 0.85 at layer 13, and the final prediction is
+`next token: " Rome" 0.838`. cos(in,out) rises from ≈0.3 (layer 0) to ≈0.93 (layer 12) and drops in the
+last layer. Layer 1 has one huge neuron (index 1417, ≈194). Runtime is about 3 s.
 For qwen2.5-coder, the top next token is `" \n"`; compare with
 `llama-completion -m "$(blob qwen2.5-coder:7b)" -p "def fibonacci(n):" -n 1 --temp 0 -no-cnv`.
 nomic prints `token contributions to pooled embedding` per token (≈0.9 each) and no logit lens.
@@ -445,6 +471,317 @@ llama vs qwen ≈ low (different BPE). Metadata differences are listed.
 
 **Edge cases:** `nd export llama3.2:1b --format xml` → error. `nd compare llama3.2:1b` → clap error (needs 2+ models).
 `nd export llama3.2:1b --format csv --table vocab | head -2` → no panic (closed pipe handled).
+
+---
+
+## 10. Model graph (Phase 10)
+
+**What to test:** the structural graph of any model (sections, layers, blocks, tensors, and
+heads / neuron buckets / experts on demand), its connections, grouping, and the four output formats.
+
+The phase-3 substitutions apply here: `qwen2.5:0.5b` was not installed, so `qwen2.5-coder:7b`
+(the same `qwen2` architecture) stands in for it. Importance values depend on what is cached:
+the numbers below came after sections 4 and 8 (weight stats and a corpus trace of `llama3.2:1b`)
+and before section 12 (sweeps).
+
+```sh
+nd graph llama3.2:1b --level section
+nd graph llama3.2:1b                                   # level layer (default)
+nd graph llama3.2:1b --level block | head -20
+nd graph llama3.2:1b --expand layer.7.attn             # lazy fine level: KV groups
+nd graph llama3.2:1b --expand layer.7.attn.kv.1        # the 4 heads of KV group 1
+nd graph llama3.2:1b --expand layer.7.ffn | grep neurons | head -3
+nd graph llama3.2:1b --level fine | tail -1
+nd graph llama3.2:1b --group-by importance
+nd graph llama3.2:1b --level tensor --group-by quant | head
+nd graph qwen2.5-coder:7b --level block | head -14
+nd graph nomic-embed-text --level block | head -16
+nd graph oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --level section
+nd graph oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --group-by kind | head -10
+nd graph oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --level block --expand layer.0 | grep -A5 "layer 0 "
+nd graph qwen3.8:27b --level section
+nd graph qwen3.8:27b | grep -E "layer 6[34] "
+
+nd node llama3.2:1b layer.7.attn
+nd node llama3.2:1b layer.7.attn.head.5
+nd node llama3.2:1b L7              # shorthands: L7, 7, blk.7, layer7, token_embd, blk.7.attn_q
+nd node llama3.2:1b token_embd
+nd node llama3.2:1b template
+
+for m in llama3.2:1b qwen2.5-coder:7b nomic-embed-text oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU; do
+  f=$(echo $m | tr '/:' '__')
+  for fmt in json dot mermaid; do nd graph $m --level block --format $fmt --out /tmp/$f.$fmt; done
+done
+nd --json graph llama3.2:1b --level block | python -c "import json,sys;v=json.load(sys.stdin);print(len(v['nodes']),len(v['edges']))"
+```
+
+Render the DOT file with Graphviz (`winget install Graphviz.Graphviz`, `sudo apt install graphviz`):
+```sh
+dot -Tsvg /tmp/llama3.2_1b.dot -o /tmp/llama-graph.svg
+dot -Tsvg /tmp/oamazonasgabriel_qwen3.5-0.8b_q8-8gbGPU.dot -o /tmp/qwen35-graph.svg
+```
+Open the SVGs in a browser. Paste a `.mermaid` file into https://mermaid.live to check it.
+
+**Expected:**
+- **llama3.2:1b section level:** 5 nodes: Input (266 MiB), Body (986 MiB), Output, Tokenizer and
+  Chat template. Everything is `breaks_model` except the template (`risky`).
+- **Layer level:** 26 nodes and 22 connections. `rope_freqs` and `token_embd` sit under Input.
+  Output holds `output_norm`, `output head (tied to token_embd)` (virtual) and `next-token logits`.
+- **Block level:** every layer holds `attention` and `feed-forward` blocks (▸ = expandable) and
+  two `residual add` ops. The JSON view has 90 nodes and 187 edges.
+- **Expanding `layer.7.attn`:** shows its 5 tensors and 8 `KV group N (heads 4N–4N+3)` nodes
+  (32 query / 8 KV heads). Expanding a KV group shows its 4 heads. The FFN shows 128 buckets of
+  64 neurons (`neurons 0-63` …). Level `fine` has 2926 nodes.
+- **qwen2.5-coder:7b:** 28 layers, biases included. Block level: 149 nodes and 317 edges.
+- **nomic-embed-text:** encoder. Output is `pooled embedding` (no logits). Input holds `token_embd`,
+  `token_types` and `token_embd_norm`. Block level: 69 nodes and 165 edges.
+- **qwen3.5 (hybrid), section level:**
+  - `Multi-token prediction` is `safe`, and `Vision encoder (in file)` (192 MiB) is `risky`.
+  - **Every layer is `breaks_model`** ("hybrid model: layer kinds follow a fixed pattern (every 4th layer is full attention)").
+  - Linear layers hold a `linear attention (SSM)` block. Every 4th layer (3, 7, … 23) holds `attention`.
+  - `--group-by kind` shows the groups `full_attention+dense` (6 layers) and `linear_attention+dense` (18).
+  - Block level: 131 nodes. The 334 vision tensors only appear at `--level tensor` or with `--expand vision`.
+- **qwen3.8:27b:**
+  - Layers 0–63 are `breaks_model`; layer 64 is the next-n layer (`risky`).
+  - Has a `Vision projector (separate file)` section (888 MiB, `safe`).
+- **`nd node`:** prints path, size, quant, layer kind, removable + reason, importance + source,
+  weight stats (if cached), activation (if traced), info, children, and `in <- / out ->` connections.
+  - `layer.7.attn.head.5` shows `columns_of_attn_output: [320, 384]`, an importance from
+    `stats: |Q|·|O| norm…` and an attention entropy from the trace.
+  - Unknown ids → `unknown node "…"`.
+- **DOT:** renders to SVG with clusters per section/layer. Colors are green (safe), amber (risky) and red (breaks_model).
+  The tied edge is dashed red, `uses` edges are dotted, and residual edges are grey.
+- **Mermaid:** `flowchart TD` with nested `subgraph`s and `classDef safe/risky/breaks_model`.
+
+**Edge cases:** `nd graph llama3.2:1b --level nope` and `--group-by nope` → usage errors.
+`--expand nope` → `unknown node`. `--format xml` → error.
+
+---
+
+## 11. Static impact: "what if I cut this?" (Phase 11)
+
+**What to test:** instant, architecture-independent impact of removing or zeroing any node(s),
+with a clear verdict. `breaks_model` cuts are refused unless `--force`.
+
+```sh
+nd ablate llama3.2:1b --cut layer.7 --static                    # one middle layer
+nd ablate llama3.2:1b --cut token_embd --static ; echo "exit=$?"  # refused
+nd ablate llama3.2:1b --cut token_embd --static --force | tail -8
+nd ablate llama3.2:1b --cut layer.7.attn --static               # all attention of one layer
+nd ablate llama3.2:1b --cut layer.7.attn.head.3,layer.7.ffn.n.0-63,layer.9.attn --static --save-plan /tmp/zero.plan.json
+nd ablate llama3.2:1b --cut layer.3,layer.4 --static
+nd ablate llama3.2:1b --cut t.output_norm.weight --static
+nd ablate llama3.2:1b --cut vocab:128000-128010 --static
+nd ablate llama3.2:1b --cut layer.7,layer.7.attn.head.3,nope --static
+nd ablate qwen2.5-coder:7b --cut layer.10.attn.head.2 --static
+nd ablate oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --cut layer.5 --static
+nd ablate oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --cut layer.4,layer.5,layer.6,layer.7 --static
+nd ablate qwen3.8:27b --cut projector,template --static
+nd --json ablate llama3.2:1b --cut layer.7 --static | python -c "import json,sys;i=json.load(sys.stdin)['impact'];print(i['verdict'],i['new_size'])"
+```
+
+Apply a zero-weights plan and check it really zeroes:
+```sh
+nd slim llama3.2:1b --plan /tmp/zero.plan.json --out llama-zero.gguf
+nd --json stats ~/neurondump/slim/llama-zero.gguf --tensor blk.9.attn_output.weight --tensor blk.7.attn_output.weight --tensor blk.7.ffn_up.weight \
+  | python -c "import json,sys
+for t in json.load(sys.stdin)['tensors']:
+    rn,cn=t.get('row_norms'),t.get('col_norms')
+    print(t['name'],'l2=%.2f'%t['l2'],'rows0-63=0:',rn and all(x==0 for x in rn[:64]),'cols192-255=0:',cn and all(x==0 for x in cn[192:256]))"
+llama-completion -m ~/neurondump/slim/llama-zero.gguf -p "The capital of Italy is" -n 10 --temp 0 -no-cnv
+```
+
+**Expected:**
+- **`layer.7`:** `remove`, 60.8M params (61.64 MiB), 4.92% of the model, `1.23 GiB -> 1.17 GiB`, verdict **RISKY**.
+  `llama.cpp loads the slimmed file`, `Renumber 8->7 … 15->14`, `slim would remove layer(s) {7}; block_count 16 -> 15`.
+- **`token_embd`:** verdict `BREAKS_MODEL — refused without --force`, error `refused: …` and exit 1. It shows:
+  - `no path from the input embeddings to the output remains`;
+  - `67 node(s) are cut off` (listed as `layer.0.add_ffn, …` in layer order);
+  - `Depends tied embeddings: token_embd is also the output head`.
+
+  With `--force` it exits 0, with the same verdict.
+- **`layer.7.attn`:** mode `zero`, 10.5M params zeroed (0.85%), size unchanged, **RISKY**,
+  `slim would zero weights in place in 1 tensor(s)` (the attention output projection).
+- **Head + neuron bucket + block:** 655K params zeroed, 3–4 tensors.
+  - **After slim:** `Applied zero_weights`, `Size 1.23 GiB (unchanged)`, `Zeroed 4 tensor(s)` and `Validate OK (147 tensors …)`.
+  - **Stats check:** `blk.9.attn_output.weight l2=0.00`. `blk.7.attn_output` has columns 192–255 zero (head 3). `blk.7.ffn_up` has rows 0–63 zero.
+  - **llama.cpp:** still continues "The capital of Italy is" with " Rome. Rome is a city located in the central", the same as the original.
+- **`layer.3,layer.4`:** RISKY. The two removed layers are bypassed together, so the path from input to output stays.
+- **`output_norm`:** BREAKS_MODEL (no path to the output).
+- **`vocab:128000-128010`:** BREAKS_MODEL. It shows:
+  - `the chat template uses 3 of the cut tokens ([128006, 128007, 128009])`;
+  - `bos/eos token(s) [128000, 128009] are cut`.
+- **Mixed ids:** `ignored layer.7.attn.head.3: an ancestor is already cut`, `unknown id: nope`.
+- **qwen2.5-coder head:** `File size 4.36 GiB -> 4.37 GiB (requantization +6.12 MiB)` and
+  `slim would requantize 1 tensor(s) to Q8_0 to zero unaligned columns`. A 128-wide head does not
+  line up with Q4_K's 256-value blocks.
+- **qwen3.5 `layer.5`:** BREAKS_MODEL, `hybrid pattern (period 4) broken: remove whole aligned groups of 4 layers instead`,
+  `llama.cpp would NOT load the slimmed file`, `simulation unsupported for architecture "qwen35"`.
+- **qwen3.5 `layer.4-7`** (one whole period): **RISKY**, `removed layers form whole periods of 4`,
+  `llama.cpp loads the slimmed file`, `988.04 MiB -> 903.69 MiB`.
+- **qwen3.8 `projector,template`:** RISKY, `Other files 888.01 MiB no longer needed (projector)`,
+  `slim would drop the vision projector from the Modelfile` / `strip tokenizer.chat_template and the Modelfile TEMPLATE`.
+
+---
+
+## 12. Simulated ablation + sweep (Phase 12, feature `trace`)
+
+**What to test:** the cut applied in memory (nothing written):
+- baseline vs ablated top-k, KL, greedy text, logit lens per layer;
+- perplexity on a corpus, plus speed and memory;
+- layer and head sweeps ranked by damage, then plan → slim → Ollama.
+
+```sh
+cat > /tmp/corpus5.txt <<'EOF'
+The quick brown fox jumps over the lazy dog. It was a sunny day and the children were playing in the park.
+
+Paris is the capital of France. Berlin is the capital of Germany, and Madrid is the capital of Spain.
+
+Rust is a systems programming language focused on safety, speed and concurrency.
+
+Water boils at one hundred degrees Celsius at sea level. Ice melts at zero degrees.
+
+Once upon a time there was a little girl who lived in a village near the forest.
+EOF
+nd ablate llama3.2:1b --cut layer.7  --prompt "The capital of Italy is" --tokens 12
+nd ablate llama3.2:1b --cut layer.15 --prompt "The capital of Italy is" --tokens 12
+for c in layer.7 layer.15 layer.0; do nd ablate llama3.2:1b --cut $c --corpus /tmp/corpus5.txt --tokens 0 --prompt Hi | grep -E "^corpus|^KL"; done
+nd ablate llama3.2:1b --cut layer.7.attn.head.3 --prompt "The capital of Italy is" --tokens 4 | grep -E "KL|tokens/s"
+nd ablate nomic-embed-text --cut layer.5 --prompt "search_query: what is rust?" --tokens 0 | grep -E "cosine|embedding"
+nd ablate oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --cut layer.4,layer.5,layer.6,layer.7 | tail -3   # static only + note
+
+nd sweep llama3.2:1b --corpus /tmp/corpus5.txt --out /tmp/llama.sweep.json --save-plan /tmp/llama-sweep.plan.json --top 2
+nd sweep llama3.2:1b --level head --layer 7 --corpus /tmp/corpus5.txt --out /tmp/llama-heads7.sweep.json
+nd graph llama3.2:1b --group-by importance | head -12        # importance now comes from the sweep
+nd node llama3.2:1b layer.3 | grep importance
+
+nd slim llama3.2:1b --plan /tmp/llama-sweep.plan.json --out llama-sweep14.gguf
+cd ~/neurondump/slim && ollama create llama-sweep14 -f llama-sweep14.Modelfile
+for m in llama3.2:1b llama-sweep14; do echo "== $m"; ollama run $m "What is the capital of Italy? Answer in one sentence."; done
+ollama rm llama-sweep14
+```
+
+**Expected:**
+- **`layer.7`, prompt "The capital of Italy is":**
+  - baseline `" Rome" 0.838`, ablated `" Rome" 0.614`; `KL(baseline || ablated) = 0.21 nats; top-1 unchanged`.
+  - Greedy text changes from `" Rome. Rome is a city located in the central region of"` to
+    `" Rome, but it's not the capital of Italy. Rome"`: the cut model contradicts itself.
+  - The lens table marks `7 (cut)`. `P(" Rome")` is 0.352 → 0.049 at layer 11, 0.491 → 0.049 at layer 12
+    and 0.838 → 0.614 at the end.
+  - `weights in use: 1.22 GiB -> 1.16 GiB`. Takes about 35 s on CPU.
+- **`layer.15` on that one prompt:** KL is only 0.12, and " Rome" even rises to 0.926 (the answer is
+  already decided at layer 14). Greedy text: `" Rome. However, there are several other cities in Italy that"`.
+  The corpus is the fair comparison, and there **the last layer hurts much more**:
+  - **layer 7:** `perplexity 7.554 -> 10.915, mean KL 0.2623`;
+  - **layer 15:** `7.554 -> 15.976, mean KL 0.6710`;
+  - **layer 0:** `7.554 -> 23257.776, mean KL 7.94, top-1 agreement 0.0%`.
+- **Head 3 of layer 7:** KL ≈ 0.003 (a single head barely matters).
+- **nomic:** `embedding |v|  22.815 → 22.722` and `embedding cosine(baseline, ablated) = 0.9872`. No top-k (no output head).
+- **qwen3.5:** static impact only, ending with `(no simulation: see the notes above; showing static impact only)`,
+  since there is no qwen35 forward pass.
+- **Layer sweep:** 5 samples, 96 positions, baseline perplexity 7.554, about 4 minutes on CPU (85 forward passes).
+  - **Most damaging:** layer 0 (KL 7.94) and layer 1 (4.35), then 15 and 14.
+  - **Least damaging:** layer 6 (0.13) and layer 12 (0.26). The `DAMAGE` column is a bar chart.
+  - `plan with the 2 least damaging layer(s) … 1.23 GiB → 1.11 GiB (risky)`.
+- **Head sweep (32 heads × 5 texts):** about 8 minutes on CPU. Head 13 hurts most (KL 0.019,
+  perplexity +5.7%), then head 2. Most heads change the perplexity by less than 1%. A one-sentence
+  corpus (as in the web test below) takes about 1 minute. Afterwards `nd node llama3.2:1b layer.7.attn.head.13`
+  shows importance `sweep: KL … when removed`, and the web graph does too.
+- **Slim:** `Applied layer_6, layer_12`, `9.8% smaller`, `Validate OK (129 tensors, vocab 128256, block_count 14)`.
+  `ollama run llama3.2:1b` answers "The capital of Italy is Rome." and `ollama run llama-sweep14` answers "Rome is the capital of Italy.".
+
+**Edge cases:**
+```sh
+nd sweep llama3.2:1b --level head --corpus /tmp/corpus5.txt             # error: --level head needs --layer N
+nd sweep llama3.2:1b --level expert --layer 0 --corpus /tmp/corpus5.txt # error: no MoE forward pass yet
+nd sweep nomic-embed-text --corpus /tmp/corpus5.txt                     # error: no output head (embedding model)
+nd sweep oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU --corpus /tmp/corpus5.txt   # simulation unsupported for "qwen35"
+cargo build --release && ./target/release/neurondump ablate llama3.2:1b --cut layer.7   # no trace feature: static + note
+```
+
+---
+
+## 13. Web graph view + ablation endpoints (Phase 13)
+
+**What to test:** the interactive graph, node panel, cut selection with live impact, simulation,
+sweep overlay, and plan → slim from the browser. Everything is served from the embedded assets, so
+it works offline:
+wamr3d 0.9.4 (MIT, WebGPU with a WebGL 2 fallback) draws all four views. It is in
+`crates/neurondump-web/frontend/vendor/wamr3d/` and is loaded only when the graph tab opens.
+
+Open `nd web --open`, pick `llama3.2:1b`, then the **graph** tab. The first toolbar control is
+**view**: `3D tower` (default), `3D city`, `3D force` or `2D`. The choice is remembered,
+and `#/model/<id>/graph?view=2d` forces one.
+
+0. **3D tower (default):**
+   - Input is at the bottom, then the 16 layers as stacked floors (Body), then Output, Tokenizer and
+     Chat template on top. The status line says `26 nodes · 22 connections`.
+   - Containers are drawn as outlines; clicking one selects it. Hovering shows a tooltip (label, kind,
+     params, bytes, removable).
+   - Drag to orbit, scroll or `−` / `+` / `100%` / `Fit` to zoom.
+   - Click, double-click to expand, search, cut outlines and color-by all work the same as in 2D.
+   - **3D city:** sections left to right, with bars whose height follows their size.
+   - **3D force:** a force layout along the dataflow.
+   - In a browser with neither WebGPU nor WebGL 2, the canvas shows an error box
+     ("The graph needs WebGPU or WebGL 2…"). There is no fallback, since 2D uses the same renderer.
+1. Switch to **2D** for steps 1–10: a flat diagram read top to bottom, seen straight on (left drag
+   pans, wheel zooms, no rotation). It shows Input → layer 0 … layer 15 → Output, colored by
+   removable flag. The dashed red arrow is the tied head. Expanded layers sit side by side as columns
+   of their blocks. Steps 2–9 also work in the 3D views.
+2. Double-click `layer 7` → its blocks appear. Double-click `attention` → 8 KV groups. Double-click
+   `KV group 0` → heads 0–3. "Collapse all" goes back.
+3. Click `head 3`: the side panel shows the path, size, removable flag, importance, weight stats,
+   activation and info (`columns_of_attn_output`). Click **Cut this** to add it to the selection.
+4. The selection panel shows the live static impact (`risky · 0 removed + 262.1K zeroed …`).
+5. Type `blk.3.ffn_down` in the graph search and press Enter → layer 3's FFN expands, and the tensor
+   is highlighted while everything else is dimmed.
+6. Set tokens to 4 and press **Simulate** → a progress line with cancel. After about 25 s the result shows:
+   - the baseline vs ablated table (top-k, generated text, tokens/s) and KL;
+   - the logit lens per layer (expandable);
+   - the corpus perplexity (the sample corpus is prefilled).
+7. **Save this cut as plan → Slim** → the usual plan table. Pick a name and press Slim.
+8. Cut `layer 6`, press **Sweep this level (layers)** → the graph recolors by damage (color by =
+   `damage`), with a sorted table. "save the 2 least damaging as a plan" → Slim.
+9. Change level (section / layer / block / tensor), group by (section / layer / block / quant / kind /
+   importance) and color by (removable / section / kind / quant / importance / damage).
+10. Repeat on `oamazonasgabriel/qwen3.5-0.8b:q8-8gbGPU`:
+    - Simulate is disabled, and its tooltip gives the reason;
+    - cutting a single layer shows `breaks_model` with the pattern explanation.
+
+API (token from the `nd web` output):
+```sh
+T=<token>; H="x-neurondump-token: $T"; U=http://127.0.0.1:7878/api; M=17d2889ccc34   # llama3.2:1b
+curl -s -H "$H" "$U/models/$M/graph?level=layer" | python -c "import json,sys;v=json.load(sys.stdin);print(v['level'],len(v['nodes']),len(v['edges']))"
+curl -s -H "$H" "$U/models/$M/graph?level=layer&group_by=kind"
+curl -s -H "$H" "$U/models/$M/graph?level=layer&expand=layer.7,layer.7.attn" | python -c "import json,sys;print(len(json.load(sys.stdin)['nodes']))"
+curl -s -H "$H" "$U/models/$M/nodes/layer.7.attn.head.3"
+curl -s -o /dev/null -w "%{http_code}\n" -H "$H" "$U/models/$M/nodes/nope"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"cut":["layer.7"]}' "$U/models/$M/impact"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"cut":["token_embd"]}' "$U/models/$M/impact" | python -c "import json,sys;i=json.load(sys.stdin);print(i['verdict'],i['refused'])"
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"cut":["layer.6","layer.12"]}' "$U/models/$M/plan-from-ablation"
+curl -s -H "$H" -X POST -H "content-type: application/json" \
+  -d '{"kind":"ablate","model":"'$M'","params":{"cut":["layer.7"],"prompt":"The capital of Italy is","tokens":4}}' "$U/jobs"
+J=$(curl -s -H "$H" -X POST -H "content-type: application/json" \
+  -d '{"kind":"sweep","model":"'$M'","params":{"level":"head","layer":7,"corpus":["Paris is the capital of France. Berlin is the capital of Germany."],"corpus_file":"/etc/passwd"}}' "$U/jobs" \
+  | python -c "import json,sys;print(json.load(sys.stdin)['id'])")
+curl -sN -H "$H" "$U/jobs/$J/events" | grep -E "^event" | sort | uniq -c
+curl -s -H "$H" -X POST -H "content-type: application/json" -d '{"sweep_job":"'$J'","top":4}' "$U/models/$M/plan-from-ablation" | python -c "import json,sys;r=json.load(sys.stdin);print(r['plan']['notes'][-1][:120], r['impact']['verdict'])"
+curl -s -o /dev/null -w "%{http_code}\n" "$U/models/$M/graph"            # no token
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://127.0.0.1:7878/assets/vendor/wamr3d/wamr3d_wasm_bg.wasm
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" http://127.0.0.1:7878/assets/vendor/wamr3d/compat.js
+```
+
+**Expected:**
+- **graph:** `layer 26 43`, and 43 nodes once layers 7 and 7.attn are expanded.
+- **nodes:** head 3 → `risky`, parent `layer.7.attn.kv.0`. `nope` → 404.
+- **impact:** `layer.7` → `risky` with `new_size` 1256447808. `token_embd` → `breaks_model True`.
+- **plan-from-ablation:** candidates `layer_6, layer_12`.
+- **jobs:**
+  - an ablate job → `{"id":"ablate-…"}`;
+  - the sweep job streams about 35 `progress` events and one `done`;
+  - `corpus_file` is stripped, so it uses the inline text;
+  - the plan from it → `4 least damaging of 32 head(s) …` with verdict `risky`.
+- **auth and assets:** no token → 401. `wamr3d_wasm_bg.wasm` → `200 application/wasm`, `compat.js` → `200 text/javascript`.
 
 ---
 
@@ -520,7 +857,7 @@ llama vs qwen ≈ low (different BPE). Metadata differences are listed.
 - [ ] plan/model mismatch and bad output names are rejected
 
 ### 8. Trace
-- [ ] llama3.2:1b: " Paris" in the logit lens from layer ~11, final prediction " Paris"
+- [ ] llama3.2:1b: " Rome" in the logit lens from layer 11, final prediction " Rome" 0.84
 - [ ] qwen2.5-coder next token matches llama.cpp
 - [ ] qwen3:8b trace runs
 - [ ] nomic: embedding contributions
@@ -535,12 +872,53 @@ llama vs qwen ≈ low (different BPE). Metadata differences are listed.
 - [ ] the JSON validates against `schemas/inspect.schema.json`
 - [ ] `compare` of 2–3 models, vocab overlap matrix
 
+### 10. Graph
+- [ ] `graph` tree at section / layer / block / tensor / fine on llama, qwen2.5-coder, nomic, qwen3.5, qwen3.8
+- [ ] hybrid layer kinds: SSM vs attention blocks, `--group-by kind`, layers `breaks_model`
+- [ ] lazy expansion: KV groups → heads, neuron buckets, experts (MoE only)
+- [ ] `--group-by` section / layer / block / quant / kind / importance
+- [ ] `node` for a block, a head, a shorthand id and an unknown id
+- [ ] json / dot / mermaid exports; `dot -Tsvg` renders; mermaid.live renders
+
+### 11. Static impact
+- [ ] middle layer → risky, renumbering, new size
+- [ ] token_embd → breaks_model, refused without `--force` (exit 1), allowed with it
+- [ ] all attention of one layer → zeroed in place, risky
+- [ ] head / neuron bucket / block plan → slim → zeros verified with `stats` → llama.cpp runs
+- [ ] Q4_K head cut reports the Q8_0 requantization
+- [ ] vocab range hitting template / bos / eos tokens → dependencies + breaks_model
+- [ ] hybrid: single layer refused, whole aligned period risky
+- [ ] projector + template → other files freed, slim file ops listed
+
+### 12. Simulation / sweep
+- [ ] middle vs last layer on llama: prompt KL, greedy text, lens table; corpus perplexity (last layer hurts more)
+- [ ] head ablation barely changes the output; nomic shows embedding cosine
+- [ ] unsupported architecture → static only with an explanation
+- [ ] layer sweep ranking, `--save-plan --top 2` → slim → `ollama create` → `ollama run` answers
+- [ ] head sweep of one layer; importance in `node` / graph comes from the sweep
+- [ ] sweep error cases (missing --layer, expert level, embedding model, qwen35)
+
+### 13. Web graph
+- [ ] graph renders offline (vendored wamr3d), level / group / color switchers, Fit, Collapse all
+- [ ] view select: 3D tower (default), 3D city, 3D force, 2D; choice remembered; `?view=` works
+- [ ] 2D: flat top-to-bottom diagram, drag pans, wheel zooms, expanded layers as columns
+- [ ] 3D: orbit, zoom −/+/100%/Fit, hover tooltip, click outline selects a container, double-click expands
+- [ ] 3D: search, cut outline, color by (incl. damage after a sweep) match the 2D view
+- [ ] no WebGPU / WebGL 2 → error box in the canvas (no fallback)
+- [ ] double-click expand / collapse down to heads; click → side panel
+- [ ] Cut this / Uncut / × in the selection; live static impact; force checkbox
+- [ ] search highlights visible nodes and expands to hidden tensors
+- [ ] Simulate (SSE progress, cancel, result view, cut nodes greyed)
+- [ ] Sweep this level / Sweep heads of layer N → damage overlay + table → plan → Slim
+- [ ] every `curl` in section 13 returns the expected status and values
+
 ---
 
 ## Incomplete or stubbed features
 
-- **Structured pruning** (heads / FFN neurons / MoE experts) is *detected and scored* but
-  `slim` refuses to apply it: no architecture is confirmed to load non-uniform shapes.
+- **Structured pruning** (heads / FFN neurons / MoE experts) is *detected and scored* by `analyze`, and `slim`
+  still refuses to remove them: no architecture is confirmed to load non-uniform shapes. They can
+  now be *zeroed* in place through `ablate --save-plan` (same shapes, same size).
 - **Trace** covers llama, qwen2, qwen3, gemma/gemma2/gemma3, phi3, bert and nomic-bert only. Only
   llama, qwen2 and nomic-bert were run here, because no gemma/phi/bert model is installed. No MoE or hybrid
   (qwen35) forward pass, so router choices are never filled. gemma2 soft-capping is skipped.
@@ -550,6 +928,22 @@ llama vs qwen ≈ low (different BPE). Metadata differences are listed.
 - **Tokenizers**: BPE pre-tokenizers are exact for llama3 / qwen2 / gpt2. Others fall back to the
   llama3 rules with a warning. SPM is implemented but untested here (no SPM model installed).
   UGM/RWKV are not implemented (vocab trimming is unavailable for those).
+- **Ablation simulation** reuses the trace forward pass, so it covers the same architectures (no MoE,
+  no SSM/hybrid, so qwen35 cuts are static only; expert sweeps are refused). Generation has no KV
+  cache: every new token reruns the whole sequence, so tokens/s is only for comparing baseline and
+  ablated, and sweeps take minutes on CPU (16 layers × 5 texts ≈ 4 min for llama3.2:1b).
+  Memory is the same for both runs (in-memory masks). The reported "weights in use" is what a
+  slimmed file would hold.
+- **Zeroing** (blocks, heads, neurons, experts) keeps every shape, so files load in llama.cpp but
+  do not get smaller. Zeroing an expert does not change the router, which can still pick it.
+  Dropping the MTP / in-file vision tensors (`drop_tensors`) is not verified to load in llama.cpp.
+- **Graph importance** without measurements is structural only (required parts = 1, edge layers =
+  0.9, the rest unmeasured). Run `trace --corpus`, `inspect --stats` or `sweep` for real numbers.
+- The 3D views were checked here in headless Chrome on the WebGL 2 path (software rendering), not with
+  WebGPU on a real GPU. In a headless `--screenshot` run the canvas stays on "loading…", because the
+  screenshot is taken before the WebAssembly finishes loading. Check in a normal browser.
+- The DOT and Mermaid exports were checked for structure here, but Graphviz is not installed on
+  the test machine, so `dot -Tsvg` rendering is part of the manual test.
 - **Requantization** in slim only targets Q8_0, and it dequantizes a whole tensor in memory.
 - **No automated tests, fuzz target or criterion benches**, as requested. Clippy was not run.
 - The REPL `web` command can only start one server per session. The web watch mode checks the

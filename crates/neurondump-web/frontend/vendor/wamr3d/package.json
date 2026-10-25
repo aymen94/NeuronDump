@@ -1,0 +1,62 @@
+{
+  "name": "wamr3d",
+  "version": "0.9.4",
+  "description": "WAMR3D: a 3D engine core in WebAssembly",
+  "license": "MIT",
+  "private": false,
+  "homepage": "https://github.com/aymen94/wamr3d#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aymen94/wamr3d.git"
+  },
+  "bugs": "https://github.com/aymen94/wamr3d/issues",
+  "keywords": [
+    "3d",
+    "webgpu",
+    "webassembly",
+    "wasm",
+    "rust",
+    "three.js"
+  ],
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./compat": {
+      "types": "./compat.d.ts",
+      "default": "./compat.js"
+    },
+    "./math": {
+      "types": "./math.d.ts",
+      "default": "./math.js"
+    },
+    "./wamr3d_wasm_bg.wasm": "./wamr3d_wasm_bg.wasm",
+    "./addons/*": "./addons/*"
+  },
+  "files": [
+    "README.md",
+    "index.js",
+    "index.d.ts",
+    "compat.js",
+    "compat.d.ts",
+    "math.js",
+    "math.d.ts",
+    "types/",
+    "compat/",
+    "webgpu.js",
+    "webgpu/",
+    "webgl.js",
+    "webgl/",
+    "addons/",
+    "wamr3d_wasm.js",
+    "wamr3d_wasm.d.ts",
+    "wamr3d_wasm_bg.wasm",
+    "wamr3d_wasm_bg.wasm.d.ts"
+  ],
+  "sideEffects": false
+}
