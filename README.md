@@ -57,6 +57,50 @@ neurondump web --open                    # the same, in your browser
 
 Run `neurondump` with no arguments to choose between the interactive CLI and the web interface.
 
+## Look inside, cut, and see the impact
+
+The web interface draws the model as a graph you can open up, in 3D (tower, city or force
+layout) or 2D. Everything is bundled, so it works offline.
+
+- **Render inside any part:**
+  - double-click a layer to see its attention and feed-forward blocks;
+  - double-click attention to see its KV groups, then its individual heads;
+  - feed-forward opens into neuron buckets, and MoE into experts.
+- **Inspect:**
+  - hover any part for its size and flag;
+  - click it for its path, contents, connections, weight statistics, activations, importance,
+    and whether it can be removed (`safe`, `risky` or `breaks_model`) and why.
+- **Search inside:** type a tensor name like `blk.3.ffn_down`. Closed layers open to show it.
+- **Cut (edit):** press **Cut this** on any part (a layer, a block, a head, a token range) to add
+  it to a cut selection. Cut parts get a red outline.
+- **Direct impact, instantly:** the panel shows:
+  - parameters removed or zeroed, and the new file size;
+  - what gets disconnected and what depends on the cut;
+  - whether llama.cpp still loads the file;
+  - a verdict.
+
+  Dangerous cuts are refused unless you force them.
+- **Simulated impact** (`--features trace`): the cut model runs in memory next to the original.
+  You compare their next tokens, KL divergence, generated text, the logit lens per layer and
+  perplexity. Nothing is written.
+- **Sweep:** cuts each layer (or head) in turn, ranks them by damage, and colors the graph with it.
+- **Save as plan → Slim:** writes the smaller GGUF and an Ollama Modelfile.
+
+The same works from the command line:
+
+```sh
+neurondump graph llama3.2:1b --expand layer.7.attn                  # inside a layer's attention
+neurondump node llama3.2:1b layer.7.attn.head.3                     # inspect one head
+neurondump ablate llama3.2:1b --cut layer.7 --static                # direct impact
+neurondump ablate llama3.2:1b --cut layer.7 --prompt "The capital of Italy is"   # simulated impact
+neurondump sweep llama3.2:1b --corpus texts.txt --save-plan plan.json --top 2
+neurondump slim llama3.2:1b --plan plan.json --out llama-14.gguf
+```
+
+![Graph page: section level, grouped by layer](docs/images/model_graph2.png)
+
+Details: [Graph and ablation](docs/graph-and-ablation.md).
+
 ## Documentation
 
 | Page | What it covers |
@@ -68,7 +112,7 @@ Run `neurondump` with no arguments to choose between the interactive CLI and the
 | [Web interface](docs/web.md) | the browser UI and the HTTP API |
 | [Analyze and slim](docs/analyze-and-slim.md) | making models smaller, safely |
 | [Trace](docs/trace.md) | running a model and looking at each layer |
-| [Graph and ablation](docs/graph-and-ablation.md) | the model as a graph; what happens if you cut a part |
+| [Graph and ablation](docs/graph-and-ablation.md) | the 3D / 2D graph: look inside layers, inspect, search, cut, direct and simulated impact |
 | [What's inside real models](docs/models.md) | Qwen3 8B vs DeepSeek-R1, and Qwen 3.8 |
 | [Building](docs/building.md) | build options and Windows notes |
 | [Manual test plan](https://github.com/aymen94/NeuronDump/blob/main/TEST.md) | step-by-step checks |

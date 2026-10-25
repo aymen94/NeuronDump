@@ -24,7 +24,7 @@ Open that link. The token is new at every start, and the page doesn't work witho
 | vocab | search the vocabulary, filter by class / language, page through 100k+ tokens |
 | tensors | filter and sort tensors; click one to see its statistics |
 | layers | a colored map of the layers (attention, linear, MoE); click a layer for its tensors |
-| graph | the model as an interactive 3D (tower, city, force) or 2D graph: expand nodes, see what they contain, cut them, simulate, sweep, save a plan (see [Graph and ablation](graph-and-ablation.md)) |
+| graph | the model as an interactive 3D (tower, city, force) or 2D graph: open layers down to heads, inspect, search, cut, see the direct impact, simulate, sweep, see what they contain, cut them, simulate, sweep, save a plan (see [Graph and ablation](graph-and-ablation.md)) |
 | template | the chat template as a collapsible tree |
 | stats | statistics and histogram for one tensor, or the whole model as a job |
 | analyze | run an analysis, tick the candidates you want, press **Slim** |

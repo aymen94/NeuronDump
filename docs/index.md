@@ -19,6 +19,13 @@ shows what's inside them, and can write a smaller version that still runs.
 | `analyze` | a list of parts that could be removed, with size and risk |
 | `slim` | a new, smaller GGUF file and an Ollama Modelfile |
 | `trace` | what each layer "thinks" while the model answers |
+| `graph`, `node` | the model as a graph: open any layer down to its heads and neurons, inspect every part |
+| `ablate` | what happens if you cut a part: the direct impact instantly, then a simulated run |
+| `sweep` | every layer or head cut in turn, ranked by damage, and turned into a prune plan |
+
+In the web interface the **graph** tab shows all of this in 3D (tower, city, force) or 2D. Search
+inside the model, cut parts, and watch the impact update as you go. See
+[Graph and ablation](graph-and-ablation.md).
 
 Everything is available from the command line and from a local web page. Every result can
 be written as JSON with a `schema_version`; the JSON Schemas are in
