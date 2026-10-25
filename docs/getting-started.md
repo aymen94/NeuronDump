@@ -4,7 +4,7 @@
 
 The quickest way is a ready-made build from the
 [releases page](https://github.com/aymen94/NeuronDump/releases) (see
-[download steps](install.md#download-a-ready-made-build)). Those builds don't include `trace`.
+[download steps](install.md#download-a-ready-made-build)).
 
 To build it yourself, follow the [install guide](install.md) for Windows or Linux. In short:
 

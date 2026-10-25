@@ -34,12 +34,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p neurondump
+        run: cargo build --release --locked --target ${{ matrix.target }} -p neurondump --features trace
 
       - name: Package
         shell: bash
         run: |
-          NAME=neurondump-${GITHUB_REF_NAME}-${{ matrix.target }}
+          NAME=neurondump-${{ matrix.target }}
           mkdir "$NAME"
           cp README.md LICENSE "$NAME"/
           if [ "${{ matrix.archive }}" = "zip" ]; then

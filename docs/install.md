@@ -9,17 +9,15 @@
 ## Download a ready-made build
 
 Every release on the [releases page](https://github.com/aymen94/NeuronDump/releases) has a
-ready-made program for 64-bit Windows and Linux, so you don't need Rust. Each download also has
-a `.sha256` file to check it. These builds include the CLI and the web interface but not
-`trace`; to run models, [build from source](#windows) with `--features trace`.
+ready-made program for 64-bit Windows and Linux, so you don't need Rust. These builds include
+the CLI, the web interface and `trace`. The commands below always download the latest release.
 
 **Windows** (PowerShell):
 
 ```powershell
-$v = "v0.1.0"
-$name = "neurondump-$v-x86_64-pc-windows-msvc"
-Invoke-WebRequest "https://github.com/aymen94/NeuronDump/releases/download/$v/$name.zip" -OutFile "$name.zip"
-Expand-Archive "$name.zip" -DestinationPath .
+$name = "neurondump-x86_64-pc-windows-msvc"
+Invoke-WebRequest "https://github.com/aymen94/NeuronDump/releases/latest/download/$name.zip" -OutFile "$name.zip"
+Expand-Archive "$name.zip" -DestinationPath . -Force
 .\$name\neurondump.exe list
 ```
 
@@ -28,9 +26,8 @@ To run `neurondump` from any folder, move `neurondump.exe` to a folder on your `
 **Linux** (glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+):
 
 ```sh
-v=v0.1.0
-name=neurondump-$v-x86_64-unknown-linux-gnu
-curl -LO "https://github.com/aymen94/NeuronDump/releases/download/$v/$name.tar.gz"
+name=neurondump-x86_64-unknown-linux-gnu
+curl -LO "https://github.com/aymen94/NeuronDump/releases/latest/download/$name.tar.gz"
 tar xzf "$name.tar.gz"
 sudo install "$name/neurondump" /usr/local/bin/    # or copy it to ~/.local/bin
 neurondump list
@@ -40,8 +37,9 @@ To check a download, also download its `.sha256` file (same URL plus `.sha256`).
 `sha256sum -c "$name.tar.gz.sha256"`, and on Windows compare `(Get-FileHash "$name.zip").Hash`
 with the value in the `.sha256` file.
 
-For a newer release, change `v0.1.0` to its version. Then try the first commands from the
-Windows or Linux section below; they also explain where NeuronDump looks for your models.
+For an older version, pick it on the [releases page](https://github.com/aymen94/NeuronDump/releases).
+Then try the first commands from the Windows or Linux section below; they also explain where
+NeuronDump looks for your models.
 
 ---
 

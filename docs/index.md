@@ -88,7 +88,7 @@ If you use NeuronDump in academic work, please cite the repository:
   author  = {Aymen},
   title   = {NeuronDump: inspecting, analyzing and slimming GGUF language models},
   year    = {2026},
-  version = {0.1.0},
+  version = {0.1.1},
   url     = {https://github.com/aymen94/NeuronDump},
   license = {MIT}
 }
