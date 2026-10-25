@@ -4,7 +4,7 @@ site_url: https://aymen94.github.io/NeuronDump/
 repo_url: https://github.com/aymen94/NeuronDump
 repo_name: aymen94/NeuronDump
 edit_uri: edit/main/docs/
-copyright: Dual-licensed under MIT or Apache-2.0
+copyright: Licensed under the MIT License
 
 nav:
   - Home: index.md

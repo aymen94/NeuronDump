@@ -73,7 +73,7 @@ Tokenizer    gpt2 (pre: llama-bpe), 128256 tokens, 280147 merges
 ```
 
 Next: [how it works](how-it-works.md), step by step, or
-[what's inside real models](models.md) for findings on Llama, Qwen and Nomic.
+[what's inside real models](models.md) for findings on DeepSeek-R1 and Qwen 3.8.
 
 ## Citing
 
@@ -86,10 +86,10 @@ If you use NeuronDump in academic work, please cite the repository:
   year    = {2026},
   version = {0.1.0},
   url     = {https://github.com/aymen94/NeuronDump},
-  license = {MIT OR Apache-2.0}
+  license = {MIT}
 }
 ```
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option.
+Licensed under the MIT License.

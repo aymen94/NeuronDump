@@ -64,7 +64,7 @@ Run `neurondump` with no arguments to choose between the interactive CLI and the
 | [Web interface](docs/web.md) | the browser UI and the HTTP API |
 | [Analyze and slim](docs/analyze-and-slim.md) | making models smaller, safely |
 | [Trace](docs/trace.md) | running a model and looking at each layer |
-| [What's inside real models](docs/models.md) | findings on Llama, Qwen, Nomic… |
+| [What's inside real models](docs/models.md) | findings on DeepSeek-R1 and Qwen 3.8 |
 | [Building](docs/building.md) | build options and Windows notes |
 | [Manual test plan](https://github.com/aymen94/NeuronDump/blob/main/TEST.md) | step-by-step checks |
 
@@ -78,4 +78,4 @@ Early version, tested on Windows with Ollama models. Known gaps are listed at th
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Licensed under the [MIT License](LICENSE).
