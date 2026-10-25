@@ -1,0 +1,23 @@
+[package]
+name = "neurondump-cli"
+description = "CLI and interactive REPL front end for NeuronDump"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+neurondump-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+rayon.workspace = true
+indicatif.workspace = true
+comfy-table.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+dialoguer = { version = "0.11", default-features = false, features = ["fuzzy-select"] }
+rustyline = { version = "14", default-features = false, features = ["with-file-history"] }

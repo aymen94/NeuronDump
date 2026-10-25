@@ -1,0 +1,16 @@
+[package]
+name = "neurondump-gguf"
+description = "Zero-copy GGUF parser, dequantization and writer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+memmap2.workspace = true
+half.workspace = true
+serde.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true

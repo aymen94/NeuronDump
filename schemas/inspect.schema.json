@@ -1,0 +1,481 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurondump.local/schemas/inspect.schema.json",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "quantization": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ollama": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "shares_weights_with": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "name",
+        "path",
+        "digest"
+      ]
+    },
+    "file": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer"
+        },
+        "endianness": {
+          "enum": [
+            "little",
+            "big"
+          ]
+        },
+        "alignment": {
+          "type": "integer"
+        },
+        "header_size": {
+          "type": "integer"
+        },
+        "data_offset": {
+          "type": "integer"
+        },
+        "file_size": {
+          "type": "integer"
+        },
+        "tensor_data_bytes": {
+          "type": "integer"
+        },
+        "n_kv": {
+          "type": "integer"
+        },
+        "n_tensors": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "value": {}
+        },
+        "additionalProperties": true,
+        "required": [
+          "key",
+          "type",
+          "value"
+        ]
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "decoder",
+            "encoder",
+            "moe",
+            "hybrid",
+            "vision_projector",
+            "unknown"
+          ]
+        },
+        "keys": {
+          "type": "object"
+        },
+        "hyperparams": {
+          "type": "object"
+        },
+        "total_params": {
+          "type": "integer"
+        },
+        "params_by_component": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "bytes_by_component": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ggml_type": {
+                "type": "string"
+              },
+              "tensors": {
+                "type": "integer"
+              },
+              "params": {
+                "type": "integer"
+              },
+              "bytes": {
+                "type": "integer"
+              },
+              "bits_per_weight": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "layers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer"
+              },
+              "mixer": {
+                "enum": [
+                  "full_attention",
+                  "sliding_attention",
+                  "linear_attention",
+                  "none"
+                ]
+              },
+              "ffn": {
+                "enum": [
+                  "dense",
+                  "moe",
+                  "moe_with_shared",
+                  "none"
+                ]
+              },
+              "params": {
+                "type": "integer"
+              },
+              "bytes": {
+                "type": "integer"
+              },
+              "n_tensors": {
+                "type": "integer"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "layer_kinds": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "unknown_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tied_embeddings": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "tokenizer": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "vocab": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "only with --full"
+    },
+    "templates": {
+      "type": "object",
+      "properties": {
+        "templates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/template_tree"
+          }
+        },
+        "ollama_system": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ollama_params": {}
+      },
+      "additionalProperties": true
+    },
+    "tensors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/tensor_row"
+      }
+    },
+    "ollama": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "projector": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "stats": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "see stats.schema.json"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "timings": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "model",
+    "file",
+    "metadata",
+    "architecture",
+    "tensors",
+    "warnings"
+  ],
+  "title": "neurondump inspect --json",
+  "$defs": {
+    "tensor_row": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "layer": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "dims": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "ggml_type": {
+          "type": "string"
+        },
+        "n_elements": {
+          "type": "integer"
+        },
+        "n_bytes": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "bits_per_weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "name",
+        "dims",
+        "ggml_type",
+        "n_bytes",
+        "offset"
+      ]
+    },
+    "template_tree": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "syntax": {
+          "enum": [
+            "jinja",
+            "go_template"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/$defs/template_node"
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "special_tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decisions": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "template_node": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "vars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/template_node"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "kind"
+      ]
+    },
+    "lens": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "prob": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "text",
+        "prob"
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "neurondump-web"
+description = "Local web interface for NeuronDump"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+neurondump-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "fs"] }
+futures-util = { version = "0.3", default-features = false }
+tower-http = { version = "0.6", default-features = false, features = ["set-header"] }
+rust-embed = "8"

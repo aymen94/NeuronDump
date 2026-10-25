@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurondump.local/schemas/compare.schema.json",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "metadata_diff": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "vocab_overlap": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "number"
+        }
+      }
+    },
+    "shared_tensor_names": {
+      "type": "integer"
+    },
+    "tensor_diffs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "models"
+  ],
+  "title": "neurondump compare --json",
+  "$defs": {
+    "tensor_row": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "layer": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "dims": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "ggml_type": {
+          "type": "string"
+        },
+        "n_elements": {
+          "type": "integer"
+        },
+        "n_bytes": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "bits_per_weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "name",
+        "dims",
+        "ggml_type",
+        "n_bytes",
+        "offset"
+      ]
+    },
+    "template_tree": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "syntax": {
+          "enum": [
+            "jinja",
+            "go_template"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/$defs/template_node"
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "special_tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decisions": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "template_node": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "vars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/template_node"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "kind"
+      ]
+    },
+    "lens": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "prob": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "text",
+        "prob"
+      ]
+    }
+  }
+}

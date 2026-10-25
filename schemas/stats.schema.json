@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurondump.local/schemas/stats.schema.json",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "model": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string"
+    },
+    "tensors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "layer": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "ggml_type": {
+            "type": "string"
+          },
+          "dims": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "n": {
+            "type": "integer"
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "mean": {
+            "type": "number"
+          },
+          "std": {
+            "type": "number"
+          },
+          "l2": {
+            "type": "number"
+          },
+          "sparsity": {
+            "type": "number"
+          },
+          "outliers": {
+            "type": "integer"
+          },
+          "outlier_fraction": {
+            "type": "number"
+          },
+          "nan_or_inf": {
+            "type": "integer"
+          },
+          "histogram": {
+            "type": "object",
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "bins": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              }
+            },
+            "additionalProperties": true
+          },
+          "row_norms": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "col_norms": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "slice_norms": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "heads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "layer": {
+            "type": "integer"
+          },
+          "head_dim": {
+            "type": "integer"
+          },
+          "q": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "k": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "v": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "o": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "ffn_neurons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "layer": {
+            "type": "integer"
+          },
+          "norms": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "experts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "layer": {
+            "type": "integer"
+          },
+          "norms": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "elapsed_ms": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "tensors"
+  ],
+  "title": "weight statistics",
+  "$defs": {
+    "tensor_row": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "layer": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "dims": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "ggml_type": {
+          "type": "string"
+        },
+        "n_elements": {
+          "type": "integer"
+        },
+        "n_bytes": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "bits_per_weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "name",
+        "dims",
+        "ggml_type",
+        "n_bytes",
+        "offset"
+      ]
+    },
+    "template_tree": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "syntax": {
+          "enum": [
+            "jinja",
+            "go_template"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/$defs/template_node"
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "special_tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decisions": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "template_node": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "vars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/template_node"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "kind"
+      ]
+    },
+    "lens": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "prob": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "text",
+        "prob"
+      ]
+    }
+  }
+}

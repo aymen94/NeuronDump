@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurondump.local/schemas/slim-report.schema.json",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "model": {
+      "type": "string"
+    },
+    "output": {
+      "type": "string"
+    },
+    "modelfile": {
+      "type": "string"
+    },
+    "original_size": {
+      "type": "integer"
+    },
+    "new_size": {
+      "type": "integer"
+    },
+    "applied": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "refused": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "removed_tokens": {
+      "type": "integer"
+    },
+    "removed_layers": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
+    "requantized": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "n_tensors": {
+          "type": "integer"
+        },
+        "n_vocab": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "block_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "perplexity": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "output",
+    "validation"
+  ],
+  "title": "neurondump slim --json",
+  "$defs": {
+    "tensor_row": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "layer": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "dims": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "ggml_type": {
+          "type": "string"
+        },
+        "n_elements": {
+          "type": "integer"
+        },
+        "n_bytes": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "bits_per_weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "name",
+        "dims",
+        "ggml_type",
+        "n_bytes",
+        "offset"
+      ]
+    },
+    "template_tree": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "syntax": {
+          "enum": [
+            "jinja",
+            "go_template"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/$defs/template_node"
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "special_tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decisions": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "template_node": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "vars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/template_node"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "kind"
+      ]
+    },
+    "lens": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "prob": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "text",
+        "prob"
+      ]
+    }
+  }
+}

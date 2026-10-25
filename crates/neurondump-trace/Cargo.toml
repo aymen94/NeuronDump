@@ -1,0 +1,15 @@
+[package]
+name = "neurondump-trace"
+description = "Candle-based inference tracing for NeuronDump"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+neurondump-core.workspace = true
+neurondump-gguf.workspace = true
+anyhow.workspace = true
+candle-core = { version = "0.9", default-features = false }

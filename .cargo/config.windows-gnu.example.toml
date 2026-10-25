@@ -1,0 +1,9 @@
+# Only needed on Windows with the GNU Rust toolchain and no MinGW binutils.
+# Copy this file to .cargo/config.toml and replace <REPO> and <TOOLCHAIN>.
+# See docs/building.md.
+[target.x86_64-pc-windows-gnu]
+rustflags = [
+    "-C", "dlltool=<REPO>/.cargo/tools/llvm-dlltool.exe",
+    "-C", "link-arg=-fuse-ld=lld",
+    "-C", "link-arg=-B<TOOLCHAIN>/lib/rustlib/x86_64-pc-windows-gnu/bin/gcc-ld",
+]

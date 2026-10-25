@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neurondump.local/schemas/prune-plan.schema.json",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "model": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string"
+    },
+    "architecture": {
+      "type": "string"
+    },
+    "original_size": {
+      "type": "integer"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "vocab_trim",
+              "reserved_tokens",
+              "tied_embeddings",
+              "low_norm_heads",
+              "low_norm_neurons",
+              "low_norm_experts",
+              "layer_redundancy",
+              "quant_headroom",
+              "unused_projector",
+              "large_metadata"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "experimental"
+            ]
+          },
+          "bytes_saved": {
+            "type": "integer"
+          },
+          "applicable": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selected": {
+            "type": "boolean"
+          },
+          "data": {}
+        },
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "kind",
+          "risk",
+          "bytes_saved",
+          "applicable",
+          "selected",
+          "data"
+        ]
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "model",
+    "digest",
+    "candidates"
+  ],
+  "title": "neurondump analyze (prune.json)",
+  "$defs": {
+    "tensor_row": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "layer": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "component": {
+          "type": "string"
+        },
+        "dims": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "ggml_type": {
+          "type": "string"
+        },
+        "n_elements": {
+          "type": "integer"
+        },
+        "n_bytes": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "bits_per_weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "name",
+        "dims",
+        "ggml_type",
+        "n_bytes",
+        "offset"
+      ]
+    },
+    "template_tree": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "syntax": {
+          "enum": [
+            "jinja",
+            "go_template"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/$defs/template_node"
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "special_tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decisions": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "template_node": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "vars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/template_node"
+          }
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "kind"
+      ]
+    },
+    "lens": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "prob": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "text",
+        "prob"
+      ]
+    }
+  }
+}

@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/neurondump-gguf",
+    "crates/neurondump-core",
+    "crates/neurondump-cli",
+    "crates/neurondump-web",
+    "crates/neurondump-trace",
+    "crates/neurondump",
+]
+default-members = ["crates/neurondump"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.88"
+repository = "https://github.com/aymen94/NeuronDump"
+homepage = "https://aymen94.github.io/NeuronDump/"
+
+[workspace.dependencies]
+neurondump-gguf = { path = "crates/neurondump-gguf" }
+neurondump-core = { path = "crates/neurondump-core" }
+neurondump-cli = { path = "crates/neurondump-cli" }
+neurondump-web = { path = "crates/neurondump-web" }
+neurondump-trace = { path = "crates/neurondump-trace" }
+
+memmap2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+rayon = "1"
+half = "2"
+anyhow = "1"
+thiserror = "2"
+regex = "1"
+dirs = "5"
+indicatif = "0.18"
+tracing = "0.1"
+comfy-table = { version = "7", default-features = false }
+
+[profile.release]
+debug = 1

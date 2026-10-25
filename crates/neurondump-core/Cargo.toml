@@ -1,0 +1,21 @@
+[package]
+name = "neurondump-core"
+description = "Discovery, extraction, analysis, slimming and jobs for NeuronDump"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+neurondump-gguf.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+rayon.workspace = true
+half.workspace = true
+anyhow.workspace = true
+regex.workspace = true
+dirs.workspace = true
+tracing.workspace = true

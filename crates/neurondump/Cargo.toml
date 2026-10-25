@@ -1,0 +1,26 @@
+[package]
+name = "neurondump"
+description = "Reverse-engineer, analyze and slim down local GGUF LLMs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "neurondump"
+path = "src/main.rs"
+
+[features]
+default = ["cli", "web"]
+cli = ["dep:neurondump-cli"]
+web = ["cli", "dep:neurondump-web"]
+trace = ["dep:neurondump-trace"]
+
+[dependencies]
+neurondump-core.workspace = true
+neurondump-cli = { workspace = true, optional = true }
+neurondump-web = { workspace = true, optional = true }
+neurondump-trace = { workspace = true, optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }

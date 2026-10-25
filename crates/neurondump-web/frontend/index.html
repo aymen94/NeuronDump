@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeuronDump</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header id="top">
+  <a href="#/models" class="brand">NeuronDump</a>
+  <nav id="mainnav">
+    <a href="#/models">Models</a>
+    <a href="#/compare">Compare</a>
+    <a href="#/jobs">Jobs<span id="jobs-badge" class="badge" hidden></span></a>
+  </nav>
+  <span id="model-label"></span>
+  <input id="search" type="search" placeholder="Search models, tokens, tensors, metadata  ( / )" autocomplete="off">
+  <div id="theme" class="segmented" role="radiogroup" aria-label="Theme">
+    <button data-theme-choice="system" role="radio" title="System theme">System</button>
+    <button data-theme-choice="light" role="radio" title="Light theme">☀ Light</button>
+    <button data-theme-choice="dark" role="radio" title="Dark theme">☾ Dark</button>
+  </div>
+</header>
+<nav id="modelnav" hidden></nav>
+<main id="view"><p>Loading…</p></main>
+<div id="toast" hidden></div>
+<script type="module" src="/assets/app.js"></script>
+</body>
+</html>
