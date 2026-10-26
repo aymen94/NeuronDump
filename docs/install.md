@@ -1,6 +1,7 @@
 # Install and run
 
 - [Download a ready-made build](#download-a-ready-made-build)
+- [Install from npm](#install-from-npm)
 - [Install from crates.io](#install-from-cratesio)
 - [Build from source: Windows](#windows)
 - [Build from source: Linux](#linux)
@@ -57,6 +58,18 @@ with the value in the `.sha256` file.
 For an older version, pick it on the [releases page](https://github.com/aymen94/NeuronDump/releases).
 Then try the first commands from the Windows or Linux section below; they also explain where
 NeuronDump looks for your models.
+
+---
+
+## Install from npm
+
+With [Node.js](https://nodejs.org) installed, this installs the ready-made build for your system
+(Windows x64, macOS Apple Silicon or Intel, Linux x64), with running models included:
+
+```sh
+npm install -g neurondump
+neurondump list
+```
 
 ---
 

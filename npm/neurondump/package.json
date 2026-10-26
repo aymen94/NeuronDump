@@ -1,0 +1,32 @@
+{
+  "name": "neurondump",
+  "version": "0.0.0",
+  "description": "Reverse-engineer, analyze and slim down local GGUF LLMs",
+  "license": "MIT",
+  "homepage": "https://aymen94.github.io/NeuronDump/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aymen94/NeuronDump.git"
+  },
+  "keywords": [
+    "gguf",
+    "llm",
+    "ollama",
+    "interpretability",
+    "llama-cpp"
+  ],
+  "bin": {
+    "neurondump": "bin/neurondump.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "optionalDependencies": {
+    "@aymen94/neurondump-windows": "0.0.0",
+    "@aymen94/neurondump-macos": "0.0.0",
+    "@aymen94/neurondump-linux": "0.0.0"
+  }
+}

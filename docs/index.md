@@ -47,6 +47,13 @@ Ready-made Windows and Linux builds are on the
 [releases page](https://github.com/aymen94/NeuronDump/releases)
 ([download steps](install.md#download-a-ready-made-build)).
 
+With [Node.js](https://nodejs.org) installed, npm picks the ready-made build for your system
+([details](install.md#install-from-npm)):
+
+```sh
+npm install -g neurondump
+```
+
 NeuronDump is also published on [crates.io](https://crates.io/crates/neurondump). With
 [Rust](https://rustup.rs) 1.88+ installed, one command builds and installs it
 ([details](install.md#install-from-cratesio)):
