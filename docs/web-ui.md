@@ -105,17 +105,18 @@ Pick a prompt and a token index (`-1` = last; click any chip to switch) and pres
 - Runs with the current edits; tick **baseline** to ignore them. MoE routing and SSM state are not
   measured (no forward pass for those architectures).
 
-![Journey page: the last token of 'Reply with the word "PASS" and nothing else.' through deepseek-r1's
-36 layers](images/model_journey.png)
+![Journey page: the last token of "Peanut butter and" through llama3.1:8b's 32 layers](images/model_journey.png)
 
-The final prediction is `" Do"` 0.135; it is first in the top 5 at layer 30 and top-1 at layer 33.
-The middle layers think about the format of the answer (`" FORMAT"`, `" ONLY"`, `" Otherwise"`,
-`" Respond"`), and from layer 7 on the token attends mostly to the first token, `"Reply"`.
+The final prediction is `" jelly"` 0.740 (then `" banana"` 0.082, `" chocolate"` 0.029); it is first
+in the top 5 at layer 27 and top-1 at layer 30. Up to layer 29 the logit lens reads "and" as
+grammar (`"/or"`, as in "and/or"); `" PB"` shows up from layer 22, and only the last two layers
+switch to the food.
 
 ![Journey page: attention heatmaps and the decision breakdown](images/model_journey2.png)
 
-The heatmaps: every layer from 7 on attends to token 0 (an attention sink); in layer 32, head 15
-(outlined) pushes the decision most. The breakdown: `" Do"` beats `" If"` by 0.182 logits.
+The heatmaps: every layer attends mostly to `<|begin_of_text|>` (an attention sink); in layer 30,
+heads 22, 24, 25 and 26 (outlined) push the decision most. The breakdown: `" jelly"` beats
+`" banana"` by 2.202 logits; head 25 of layer 30 pushes against it (−0.688), head 24 for it (+0.479).
 
 ## Timeline
 
@@ -123,6 +124,13 @@ Generate N tokens (greedy, or with temperature / top-k / top-p / seed). Each ste
 chosen token, its probability and the distribution's entropy as small bars, and the top alternative;
 forced tokens (from a `force` edit) have an orange border. A table lists the same. **Click a step**
 for its decision breakdown (computed on demand, or instantly with **explain**).
+
+![Timeline page: llama3.1:8b generating 12 tokens, with step 11 explained](images/model_timeline.png)
+
+llama3.1:8b on "The Mediterranean Sea is located between" (chat, 12 steps, explain). The two
+uncertain steps stand out by their entropy bar: `" three"` 0.599 against `" Europe"` 0.218, then
+`" Europe"` 0.567 against `" Africa"` 0.414. Step 11 is open: `" Africa"` 0.990 beats `" Asia"` by
+4.627 logits, with the push per layer and the top heads (L24 H2 first).
 
 ## Edits
 
@@ -163,6 +171,17 @@ tokenizer, Ollama settings and the vision projector.
 **trace**: deepseek-r1 on "The name of the star that Earth orbits is". The last column is the logit lens: the answer appears at layer 29 (`"太阳"`, then `" Sun"`).
 
 ![Trace page with the logit lens](images/model_trace.png)
+
+**trace**: llama3.1:8b on the same prompt. `" Sun"` is top-1 from layer 21 to 26, then `" called"`
+takes over; the next token is `" called"` 0.336, `" the"` 0.159, `" Sol"` 0.144.
+
+![Trace page for llama3.1:8b](images/model_trace2.png)
+
+**stats**: qwen2.5-coder:7b, one tensor (`blk.19.attn_norm.weight`: 3,584 F32 values, mean 0.795,
+histogram on a log scale) and the whole model as a job (339 tensors in 7.6 s). The attention biases
+of layer 0 stand out: `blk.0.attn_k.bias` goes from −180 to 188.
+
+![Weight statistics page](images/model_stats.png)
 
 **Compare**: qwen3.8:27b next to qwen3:8b.
 

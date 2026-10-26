@@ -225,7 +225,7 @@ neurondump[llama3.2:1b]> layer 3
 neurondump[llama3.2:1b]> vocab Rome --limit 5
 neurondump[llama3.2:1b]> stats &          # & = run in the background
 neurondump[llama3.2:1b]> jobs
-neurondump[llama3.2:1b]> use nomic-embed-text
+neurondump[llama3.2:1b]> use qwen2.5-coder:7b
 ```
 
 | Command | |

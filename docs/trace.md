@@ -47,6 +47,12 @@ layer 14 the model has settled on " called" (0.39). The last layer turns that in
 fixed or constant name"): a 1B model does not answer " Sun" here. Larger models do; see
 [What's inside real models](models.md).
 
+llama3.1:8b gets there: `" Sun"` is top-1 from layer 21 (0.45) to layer 26. The last layers then
+prefer `" called"` (0.336, then `" the"` 0.159 and `" Sol"` 0.144), so the model writes "…is called
+the Sun" rather than answering in one word.
+
+![Trace of llama3.1:8b on the same prompt](images/model_trace2.png)
+
 ## One token in depth
 
 `trace` shows the last position. To follow **any** token, see the attention of every head and the
@@ -65,7 +71,7 @@ rank which layers can be removed.
 
 ## Embedding models
 
-For models like `nomic-embed-text`, there is no next token. Instead, trace shows how much each
+For embedding models like `all-minilm`, there is no next token. Instead, trace shows how much each
 input token contributes to the final embedding.
 
 ## Supported architectures

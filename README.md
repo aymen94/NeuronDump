@@ -123,7 +123,7 @@ Tower, city and force layouts are there too. Everything is bundled, so it works 
   perplexity, logit lens, decision breakdown), with **undo / redo / restore all**, toggles, named
   snapshots and a portable `edits.json`. **Bake** writes a new GGUF; the original is never touched.
 
-![Token journey of deepseek-r1: logit lens, residual norm and attention per layer](docs/images/model_journey.png)
+![Token journey of llama3.1:8b on "Peanut butter and": logit lens, residual norm and attention per layer](docs/images/model_journey.png)
 
 ![Attention heatmaps per layer and per head, and the decision breakdown](docs/images/model_journey2.png)
 
