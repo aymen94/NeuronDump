@@ -2,6 +2,20 @@
 
 Features by development phase.
 
+## 0.1.4
+
+- **macOS builds:** release archives for `aarch64-apple-darwin` and `x86_64-apple-darwin`.
+- **Model discovery:** Jan models, LM Studio home pointer, `XDG_CACHE_HOME` for Hugging Face,
+  `NEURONDUMP_MODEL_DIRS`, `--dir` (alias of `--scan`); `mmproj` files attach to their model.
+- **Model diff:** `diff <a> <b>` (`--json`, `--top N`, `--metadata-only`) and a Diff page: streamed
+  relative L2 / cosine / max |diff| per tensor, layer, block and expert across any quant types,
+  metadata / vocab / chat template diff, graph coloring by diff. `slim` now records removed layers
+  (`neurondump.removed_layers`) so slimmed models realign.
+- **Browser demo:** the web UI on a WebAssembly build of the static inspection core
+  (`crates/neurondump-wasm`, `scripts/build-wasm-demo.sh`), published with the docs at `/demo/`.
+  Files are read lazily with `Blob.slice`; nothing is uploaded. `neurondump-core` gains a default
+  `native` feature; `neurondump-gguf` can parse a header prefix and load tensor data on demand.
+
 ## 0.1.3
 
 - **Phase 14 – 3D model graph:** 2D / 3D toggle with a 3D dataflow view drawn by wamr3d (instanced

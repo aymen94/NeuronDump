@@ -4,13 +4,14 @@
 - [Install from crates.io](#install-from-cratesio)
 - [Build from source: Windows](#windows)
 - [Build from source: Linux](#linux)
+- [Build from source: macOS](#macos)
 - [Optional tools](#optional-tools)
 - [Problems](#problems)
 
 ## Download a ready-made build
 
 Every release on the [releases page](https://github.com/aymen94/NeuronDump/releases) has a
-ready-made program for 64-bit Windows and Linux, so you don't need Rust. These builds include
+ready-made program for 64-bit Windows, Linux and macOS (Apple Silicon and Intel), so you don't need Rust. These builds include
 the CLI, the web interface and `trace`. The commands below always download the latest release.
 
 **Windows** (PowerShell):
@@ -34,8 +35,23 @@ sudo install "$name/neurondump" /usr/local/bin/    # or copy it to ~/.local/bin
 neurondump list
 ```
 
+**macOS** (Apple Silicon: `aarch64-apple-darwin`; Intel Macs: `x86_64-apple-darwin`):
+
+```sh
+name=neurondump-aarch64-apple-darwin    # or neurondump-x86_64-apple-darwin
+curl -LO "https://github.com/aymen94/NeuronDump/releases/latest/download/$name.tar.gz"
+tar xzf "$name.tar.gz"
+xattr -d com.apple.quarantine "$name/neurondump" 2>/dev/null   # unsigned build: clear Gatekeeper flag
+sudo install "$name/neurondump" /usr/local/bin/
+neurondump list
+```
+
+The macOS builds are not signed. Downloading with `curl` usually doesn't set the quarantine
+flag; if you downloaded in a browser and macOS says the program "cannot be opened", run the
+`xattr` line above.
+
 To check a download, also download its `.sha256` file (same URL plus `.sha256`). On Linux run
-`sha256sum -c "$name.tar.gz.sha256"`, and on Windows compare `(Get-FileHash "$name.zip").Hash`
+`sha256sum -c "$name.tar.gz.sha256"`, on macOS `shasum -a 256 -c "$name.tar.gz.sha256"`, and on Windows compare `(Get-FileHash "$name.zip").Hash`
 with the value in the `.sha256` file.
 
 For an older version, pick it on the [releases page](https://github.com/aymen94/NeuronDump/releases).
@@ -162,8 +178,10 @@ NeuronDump finds Ollama models in `%USERPROFILE%\.ollama\models` automatically. 
 them, set `OLLAMA_MODELS` the same way you did for Ollama, or pass the folder:
 
 ```powershell
-neurondump --scan D:\ollama\models list
+neurondump --dir D:\ollama\models list
 ```
+
+LM Studio, Jan and Hugging Face folders are scanned too (see [getting started](getting-started.md)).
 
 ---
 
@@ -274,6 +292,22 @@ took 8 s there, against about 3 s natively.
 
 ---
 
+### macOS
+
+Install the Xcode command line tools (`xcode-select --install`) and Rust from
+[rustup.rs](https://rustup.rs), then build like on Linux:
+
+```sh
+git clone https://github.com/aymen94/NeuronDump && cd NeuronDump
+cargo build --release -p neurondump --features trace
+./target/release/neurondump list
+```
+
+Ollama, LM Studio, Jan and Hugging Face models are found in their default macOS folders (see
+[getting started](getting-started.md)).
+
+---
+
 ## Optional tools
 
 | Tool | Used for | Install |
@@ -300,6 +334,6 @@ ollama pull llama3.2:1b
 | `link.exe not found` (Windows) | install the Visual Studio Build Tools (step 1) |
 | `dlltool.exe: program not found` (Windows) | you are on the GNU toolchain: see [building.md](building.md#windows) |
 | `package requires rustc 1.88` | `rustup update` |
-| `list` shows no models | check where Ollama keeps them and use `OLLAMA_MODELS` or `--scan <folder>`; in WSL see [WSL](#wsl-linux-inside-windows) |
+| `list` shows no models | check where Ollama keeps them and use `OLLAMA_MODELS`, `--dir <folder>` or `NEURONDUMP_MODEL_DIRS`; in WSL see [WSL](#wsl-linux-inside-windows) |
 | `trace support is not compiled in` | rebuild with `--features trace` |
 | trace is very slow or runs out of memory | it runs on the CPU and loads the whole model: use a smaller model |

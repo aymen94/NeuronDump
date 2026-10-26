@@ -31,7 +31,7 @@ Here is the whole path, from a model name to a smaller model.
 
 Ollama keeps a small manifest file for each model. It says which big file holds the
 weights and which small files hold the chat template, system prompt and settings.
-NeuronDump also scans the llama.cpp, Hugging Face and LM Studio folders for `.gguf` files.
+NeuronDump also scans the llama.cpp, Hugging Face, LM Studio and Jan folders for `.gguf` files.
 
 ## 2. Read
 

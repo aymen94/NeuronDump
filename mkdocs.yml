@@ -8,6 +8,7 @@ copyright: Licensed under the MIT License
 
 nav:
   - Home: index.md
+  - Browser demo: https://aymen94.github.io/NeuronDump/demo/
   - How it works: how-it-works.md
   - Guide:
       - Install and run: install.md

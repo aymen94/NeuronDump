@@ -10,7 +10,7 @@ These work with every command.
 | `--threads N` | number of worker threads (default: all cores) |
 | `--timings` | print how long each step took (stderr) |
 | `-q`, `--quiet` | no progress bars or messages |
-| `--scan <dir>` | also look for `.gguf` files in this folder (repeatable) |
+| `--dir <dir>` | also look for `.gguf` files in this folder (repeatable; alias `--scan`; see also `NEURONDUMP_MODEL_DIRS`) |
 | `--ui cli\|web` | interface to start when no command is given (or env `NEURONDUMP_UI`) |
 
 Progress bars go to stderr, so `--json` output can be piped safely.
@@ -197,6 +197,26 @@ neurondump edit llama3.2:1b --apply edits.json --bake llama-edited.gguf --no-com
 ### `compare <model> <model> [...]`
 Side by side: sizes, layers, tokenizer, vocabulary overlap, differing metadata.
 
+### `diff <model_a> <model_b>`
+Weight and metadata diff of B against A: base vs fine-tune, Q4 vs Q8 of the same model, or the
+original vs a NeuronDump-slimmed model. Tensors are matched by name; matching tensors are
+dequantized block by block from both files (any pair of types, e.g. `Q4_K` vs `F16`) and compared
+by **relative L2** (`‖a−b‖ / ‖a‖`), **cosine similarity** and **max |a−b|**, then aggregated per
+layer, per block (attention / SSM, FFN, MoE) and per MoE expert. Also lists tensors only in A or
+only in B, shape mismatches, differing metadata (architecture parameters included), vocabulary
+size and changed tokens, and the chat template's first differing line. A slimmed model records
+the layers it removed (`neurondump.removed_layers`), so its layers are realigned before matching.
+
+| Flag | Meaning |
+|---|---|
+| `--top N` | most-changed tensors to show (default 20); with `--json`, keep only N in the report |
+| `--metadata-only` | skip the weights (fast) |
+| `--json` | full report |
+
+```sh
+neurondump diff llama3.2:1b-instruct-q4_K_M llama3.2:1b-instruct-q8_0 --top 10
+```
+
 ### `export <model>`
 | Option | |
 |---|---|
@@ -234,7 +254,7 @@ neurondump[llama3.2:1b]> use qwen2.5-coder:7b
 | `search <text>` | search models + the current model's tokens, tensors, metadata |
 | `models` | list models |
 | `info`, `layers`, `layer N`, `tensors`, `vocab`, `template`, `stats` | same as the commands above, for the current model |
-| `analyze`, `slim`, `trace <prompt>`, `compare <model>`, `export` | same as above |
+| `analyze`, `slim`, `trace <prompt>`, `compare <model>`, `diff <model>`, `export` | same as above (`diff`: the current model is A) |
 | `graph [options]`, `node <id>` | the graph of the current model |
 | `cut <id>...`, `uncut <id>\|all`, `selection`, `impact` | build a cut selection and see its static impact |
 | `simulate [prompt] [--tokens N] [--corpus f]` | run the selection in memory (`&` for background) |

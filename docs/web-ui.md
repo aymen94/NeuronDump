@@ -22,6 +22,7 @@ Open that link. The token is new at every start, and the page doesn't work witho
 |---|---|
 | **Models** | every local model, total disk size, filter box, sortable columns; Rescan |
 | **Compare** | two or more models side by side, vocabulary overlap, differing metadata |
+| **Diff** | weight diff of model B against model A per layer, block, expert and tensor, plus metadata, vocabulary and chat template; **Color the graph of A by this diff** |
 | **Jobs** | running and finished jobs, live progress, cancel, results |
 | model › **overview** | summary cards, architecture, sizes, tokenizer, special tokens, Ollama settings, warnings, searchable metadata, export links |
 | model › **vocab** | search the vocabulary, filter by class / language, page through 100k+ tokens |
@@ -51,7 +52,9 @@ journey, timeline, compare (and trace, simulate, sweep) need a build with `--fea
   next to it shows the renderer backend: `WebGPU`, `WebGPU (software)` or `WebGL 2`. See
   [3D graph](3d-graph.md).
 - **level** (section, layer, block, tensor), **group by** (section, layer, block, quant, kind,
-  importance), **color by** (removable, section, kind, quant, importance, damage, flow).
+  importance), **color by** (removable, section, kind, quant, importance, damage, flow, diff).
+  **diff** uses the last run of the **Diff** page with this model as A: relative L2, scaled within
+  each level (pale = unchanged, red = most changed); the side panel shows the node's numbers.
 - **Click** a node for the side panel (path, size, removable flag, importance, stats, activation,
   contents, connections). **Double-click** (or **Expand**) opens it: layer → blocks → KV groups →
   heads; FFN → neuron buckets; MoE → experts. **Focus** flies the camera to it.

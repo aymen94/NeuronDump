@@ -32,13 +32,21 @@ NeuronDump looks in these places automatically:
 |---|---|
 | Ollama | `OLLAMA_MODELS`, or `~/.ollama/models` (`%USERPROFILE%\.ollama\models` on Windows) |
 | llama.cpp | `LLAMA_CACHE`, or `~/.cache/llama.cpp` |
-| Hugging Face | `HF_HUB_CACHE`, `HF_HOME/hub`, or `~/.cache/huggingface/hub` |
-| LM Studio | `~/.lmstudio/models` |
+| Hugging Face | `HF_HUB_CACHE`, `HF_HOME/hub`, `XDG_CACHE_HOME/huggingface/hub`, or `~/.cache/huggingface/hub` (all OSes) |
+| LM Studio | the folder in `~/.lmstudio-home-pointer` + `/models`, `~/.lmstudio/models`, or the old `~/.cache/lm-studio/models` |
+| Jan | `<data folder>/llamacpp/models` and `<data folder>/models`; data folder is `%APPDATA%\Jan\data` (Windows), `~/Library/Application Support/Jan/data` (macOS), `~/.local/share/Jan/data` or `~/.config/Jan/data` (Linux); also the old `~/jan/models` |
 
-For other folders, add `--scan <dir>` or save them in the config:
+Folders that don't exist are skipped. The `SOURCE` column of `list` shows which app a model
+came from; a file reachable from two places is listed once. A `mmproj*.gguf` next to a model
+is attached to it as its vision projector.
+
+If you moved an app's models folder (e.g. a custom LM Studio or Jan folder), add it with
+`--dir <folder>` (repeatable; `--scan` still works), the `NEURONDUMP_MODEL_DIRS` environment
+variable (a path list: `;`-separated on Windows, `:`-separated elsewhere), or the config:
 
 ```sh
-neurondump --scan ~/my-models list
+neurondump --dir ~/my-models list
+NEURONDUMP_MODEL_DIRS="$HOME/models:/mnt/data/gguf" neurondump list
 neurondump config set scan_dirs "C:/models, D:/more-models"
 ```
 

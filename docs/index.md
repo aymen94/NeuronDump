@@ -83,6 +83,13 @@ Add `--features trace` to be able to run models.
 
 ## Try it
 
+**In your browser, without installing anything:** the [browser demo](https://aymen94.github.io/NeuronDump/demo/) opens a
+`.gguf` file you drop on the page and shows its metadata, tensors, layers, vocabulary, chat
+template, the 2D / 3D graph and per-tensor weight statistics. It runs 100% locally (nothing is
+uploaded) and is inspection only; everything else needs the desktop app.
+
+On your computer:
+
 ```sh
 neurondump list
 neurondump inspect llama3.2:1b
@@ -112,11 +119,11 @@ If you use NeuronDump in academic work, please cite the repository:
 
 ```bibtex
 @software{neurondump,
-  author  = {Aymen},
+  author  = {Aymen Naghmouchi},
   email   = {aymenadvance@gmail.com}
   title   = {NeuronDump: inspecting, analyzing and slimming GGUF language models},
   year    = {2026},
-  version = {0.1.3},
+  version = {0.1.4},
   url     = {https://github.com/aymen94/NeuronDump},
   license = {MIT}
 }

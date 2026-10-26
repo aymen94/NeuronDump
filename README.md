@@ -19,9 +19,12 @@ ban…) with undo and a before / after comparison, then bake the edits into a ne
 
 ![The model graph of qwen3.8:27b in the web interface (3D city view)](docs/images/model_graph.png)
 
+**Try it in your browser:** the [browser demo](https://aymen94.github.io/NeuronDump/demo/) inspects a `.gguf` file you
+drop on the page, 100% locally (nothing is uploaded). Inspection only; the rest needs the app.
+
 ## Install
 
-**Download:** ready-made Windows and Linux builds are on the
+**Download:** ready-made Windows, Linux and macOS builds are on the
 **[releases page](https://github.com/aymen94/NeuronDump/releases)**. Unzip and run `neurondump list`.
 Download steps and checks: **[install guide](docs/install.md#download-a-ready-made-build)**.
 
@@ -29,7 +32,7 @@ Download steps and checks: **[install guide](docs/install.md#download-a-ready-ma
 (add `--features trace` to also run models).
 
 **Build from source:** you need [Git](https://git-scm.com) and [Rust](https://rustup.rs) 1.88 or newer.
-Step-by-step instructions: **[Windows and Linux install guide](docs/install.md)**.
+Step-by-step instructions: **[Windows, Linux and macOS install guide](docs/install.md)**.
 
 **Windows** (PowerShell):
 

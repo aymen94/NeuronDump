@@ -42,6 +42,7 @@ crates/
   neurondump-trace/   model execution (feature "trace")
   neurondump-cli/     command line + REPL
   neurondump-web/     web server; frontend/ holds the HTML/JS, embedded in the binary
+  neurondump-wasm/    static inspection in WebAssembly for the browser demo; www/demo.js
   neurondump/         the executable
 schemas/              JSON Schemas of every output
 docs/                 this documentation + the GitHub Pages site
@@ -81,3 +82,29 @@ To preview locally:
 pip install -r docs/requirements.txt
 mkdocs serve          # http://127.0.0.1:8000, reloads on save
 ```
+
+## Browser demo
+
+The [browser demo](https://aymen94.github.io/NeuronDump/demo/) is the regular web UI running on a WebAssembly
+build of the static part of `neurondump-core` (GGUF parsing, metadata, tensors, architecture,
+graph, vocabulary, chat template, per-tensor weight statistics). `neurondump-core` is built
+with `default-features = false`, which leaves out the `native` feature: the app / job system,
+config, analysis, slimming, edits, ablation, diff, and anything that opens files. The trace
+runtime (`neurondump-trace`) is not included.
+
+The page reads the dropped file with `Blob.slice`: the header first (8 MiB, grown while the
+header does not fit), then a single tensor's bytes when you ask for its statistics (up to
+512 MiB). Nothing is uploaded.
+
+Build it into `docs/demo/` (ignored by git; the docs workflow builds it before `mkdocs`):
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version <version of wasm-bindgen in Cargo.lock> --locked
+scripts/build-wasm-demo.sh
+mkdocs serve          # then open http://127.0.0.1:8000/demo/
+```
+
+Any static file server works too (`python -m http.server -d docs/demo`); the page must be served
+over HTTP, not opened as a `file://` URL. `wasm-opt` (binaryen) is used when installed.
+
