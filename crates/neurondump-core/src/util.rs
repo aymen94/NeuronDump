@@ -4,6 +4,26 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// `std::time::Instant` natively; on wasm32 (where `Instant::now` panics) a clock that
+/// always reads zero, so timings are simply 0 in the browser.
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, Copy)]
+pub struct Instant;
+
+#[cfg(target_arch = "wasm32")]
+impl Instant {
+    pub fn now() -> Self {
+        Instant
+    }
+
+    pub fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
 /// FNV-1a 64-bit; used for stable opaque ids and cache keys.
 pub fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;

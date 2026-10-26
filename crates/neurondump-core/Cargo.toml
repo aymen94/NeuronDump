@@ -22,3 +22,8 @@ anyhow.workspace = true
 regex.workspace = true
 dirs.workspace = true
 tracing.workspace = true
+
+[features]
+default = ["native"]
+# Filesystem, threads and job system (everything but static inspection); off for wasm.
+native = []

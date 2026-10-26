@@ -1,7 +1,6 @@
 //! `inspect`: everything inside a model file, as one serializable report.
 
 use std::path::PathBuf;
-use std::time::Instant;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,7 @@ use crate::model::ModelHandle;
 use crate::stats::{compute_stats, StatsOptions, StatsReport};
 use crate::template::{template_report, TemplateReport};
 use crate::tokenizer::{Token, Vocab, VocabSummary};
-use crate::util::{value_json, Progress, SCHEMA_VERSION};
+use crate::util::{value_json, Progress, SCHEMA_VERSION, Instant};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InspectOptions {

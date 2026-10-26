@@ -23,6 +23,7 @@ pub enum JobKind {
     Generate,
     Compare,
     Bake,
+    Diff,
 }
 
 impl JobKind {
@@ -39,6 +40,7 @@ impl JobKind {
             JobKind::Generate => "generate",
             JobKind::Compare => "compare",
             JobKind::Bake => "bake",
+            JobKind::Diff => "diff",
         }
     }
 
@@ -55,6 +57,7 @@ impl JobKind {
             "generate" => JobKind::Generate,
             "compare" => JobKind::Compare,
             "bake" => JobKind::Bake,
+            "diff" => JobKind::Diff,
             _ => return None,
         })
     }

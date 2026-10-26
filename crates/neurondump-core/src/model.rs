@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 
 use neurondump_gguf::GgufFile;
@@ -25,6 +25,7 @@ pub struct ModelHandle {
     pub ollama: OllamaExtras,
 }
 
+#[cfg(feature = "native")]
 fn read_small(path: &std::path::Path, limit: u64) -> Option<String> {
     let md = std::fs::metadata(path).ok()?;
     if md.len() > limit {
@@ -35,7 +36,14 @@ fn read_small(path: &std::path::Path, limit: u64) -> Option<String> {
 }
 
 impl ModelHandle {
+    /// A handle over an already parsed file (e.g. read lazily in the browser).
+    pub fn from_gguf(entry: ModelEntry, gguf: GgufFile) -> Self {
+        Self { entry, gguf: Arc::new(gguf), ollama: OllamaExtras::default() }
+    }
+
+    #[cfg(feature = "native")]
     pub fn open(entry: ModelEntry) -> Result<Self> {
+        use anyhow::Context;
         let gguf = GgufFile::open(&entry.path).with_context(|| format!("parsing {}", entry.path.display()))?;
         let mut ollama = OllamaExtras::default();
         if let Some(info) = &entry.ollama {
@@ -60,6 +68,9 @@ impl ModelHandle {
     }
 
     pub fn open_projector(&self) -> Option<Result<GgufFile>> {
-        self.entry.projector.as_ref().map(|p| GgufFile::open(p).map_err(Into::into))
+        #[cfg(feature = "native")]
+        return self.entry.projector.as_ref().map(|p| GgufFile::open(p).map_err(Into::into));
+        #[cfg(not(feature = "native"))]
+        None
     }
 }

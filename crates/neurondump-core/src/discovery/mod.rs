@@ -1,5 +1,5 @@
-//! Finding local GGUF models: Ollama stores, llama.cpp / Hugging Face / LM Studio caches
-//! and user-configured directories.
+//! Finding local GGUF models: Ollama stores, llama.cpp / Hugging Face / LM Studio / Jan
+//! caches and user-configured directories (`--dir`, `scan_dirs`, `NEURONDUMP_MODEL_DIRS`).
 
 mod files;
 mod ollama;
@@ -9,14 +9,17 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{bail, Result};
-use rayon::prelude::*;
 use serde::Serialize;
 
-use neurondump_gguf::{file_type_name, GgufFile, ParseOptions};
+use neurondump_gguf::{file_type_name, GgufFile};
 
 use crate::util::{edit_distance, short_id};
 
 pub use ollama::{ollama_model_dirs, OllamaInfo, OllamaLayer};
+
+mod library;
+#[cfg(feature = "native")]
+pub use library::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +28,7 @@ pub enum SourceKind {
     LlamaCpp,
     HuggingFace,
     LmStudio,
+    Jan,
     Directory,
     File,
 }
@@ -36,6 +40,7 @@ impl SourceKind {
             SourceKind::LlamaCpp => "llama.cpp",
             SourceKind::HuggingFace => "huggingface",
             SourceKind::LmStudio => "lmstudio",
+            SourceKind::Jan => "jan",
             SourceKind::Directory => "dir",
             SourceKind::File => "file",
         }
@@ -139,195 +144,9 @@ pub fn quantization_label(g: &GgufFile) -> Option<String> {
     by_type.into_iter().max_by_key(|(_, b)| *b).map(|(n, _)| n)
 }
 
-impl Library {
-    pub fn discover(options: DiscoveryOptions) -> Self {
-        let mut entries = Vec::new();
-        let mut warnings = Vec::new();
-        if !options.no_defaults {
-            for dir in ollama_model_dirs() {
-                ollama::scan(&dir, &mut entries, &mut warnings);
-            }
-            files::scan_default_caches(&mut entries, &mut warnings);
-        }
-        for dir in &options.extra_dirs {
-            if dir.join("manifests").is_dir() && dir.join("blobs").is_dir() {
-                ollama::scan(dir, &mut entries, &mut warnings);
-            } else {
-                files::scan_dir(dir, SourceKind::Directory, &mut entries, &mut warnings);
-            }
-        }
-        dedup(&mut entries);
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
-        let fingerprint = Self::compute_fingerprint(&options);
-        Self { entries, warnings, options, fingerprint }
-    }
-
-    pub fn rescan(&mut self) {
-        let extra: Vec<ModelEntry> =
-            self.entries.iter().filter(|e| e.source == SourceKind::File).cloned().collect();
-        *self = Self::discover(self.options.clone());
-        for e in extra {
-            if !self.entries.iter().any(|x| x.path == e.path) {
-                self.entries.push(e);
-            }
-        }
-    }
-
-    /// Cheap change detector over Ollama manifest dirs and scan dirs (count + newest mtime).
-    fn compute_fingerprint(options: &DiscoveryOptions) -> u64 {
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        if !options.no_defaults {
-            for d in ollama_model_dirs() {
-                dirs.push(d.join("manifests"));
-                dirs.push(d.join("manifests-v2"));
-            }
-        }
-        dirs.extend(options.extra_dirs.iter().cloned());
-        let mut count = 0u64;
-        let mut newest = 0u64;
-        for d in dirs {
-            walk_mtimes(&d, 0, &mut count, &mut newest);
-        }
-        count.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ newest
-    }
-
-    /// Rescans if anything changed on disk since the last scan. Returns true if it did.
-    pub fn refresh_if_changed(&mut self) -> bool {
-        if Self::compute_fingerprint(&self.options) != self.fingerprint {
-            self.rescan();
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn by_id(&self, id: &str) -> Option<&ModelEntry> {
-        self.entries.iter().find(|e| e.id == id)
-    }
-
-    /// Resolves `llama3.2:1b`, `ns/model:tag`, `host/ns/model:tag`, an id, a file
-    /// stem, or a path to a `.gguf` (which is added to the library).
-    pub fn resolve(&mut self, query: &str) -> Result<ModelEntry> {
-        let q = query.trim();
-        if let Some(e) = self.find(q) {
-            return Ok(e.clone());
-        }
-        let p = Path::new(q);
-        if p.is_file() {
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| q.to_string());
-            let e = ModelEntry::from_file(p, SourceKind::File, name);
-            if let Some(existing) = self.entries.iter().find(|x| x.path == e.path) {
-                return Ok(existing.clone());
-            }
-            self.entries.push(e.clone());
-            return Ok(e);
-        }
-        let mut suggestions: Vec<(usize, &str)> = self
-            .entries
-            .iter()
-            .map(|e| (edit_distance(&e.name.to_lowercase(), &q.to_lowercase()), e.name.as_str()))
-            .collect();
-        suggestions.sort();
-        let close: Vec<&str> = suggestions.iter().filter(|(d, _)| *d <= 4.max(q.len() / 3)).take(3).map(|s| s.1).collect();
-        if close.is_empty() {
-            bail!("no model named {q:?} (run `neurondump list` to see available models)");
-        }
-        bail!("no model named {q:?}; did you mean: {}?", close.join(", "))
-    }
-
-    fn find(&self, q: &str) -> Option<&ModelEntry> {
-        if let Some(e) = self.entries.iter().find(|e| e.id == q || e.name == q) {
-            return Some(e);
-        }
-        let norm = ollama::normalize_name(q);
-        if let Some(e) = self
-            .entries
-            .iter()
-            .find(|e| e.ollama.as_ref().is_some_and(|o| o.full_name() == norm))
-        {
-            return Some(e);
-        }
-        let lower = q.to_lowercase();
-        self.entries.iter().find(|e| {
-            e.name.to_lowercase() == lower
-                || e.path.file_stem().is_some_and(|s| s.to_string_lossy().to_lowercase() == lower)
-        })
-    }
-
-    /// Header-only summaries of all entries, read in parallel.
-    pub fn summaries(&self) -> Vec<ModelSummary> {
-        self.entries.par_iter().map(summarize).collect()
-    }
-}
-
-pub fn summarize(e: &ModelEntry) -> ModelSummary {
-    let mut s = ModelSummary {
-        id: e.id.clone(),
-        name: e.name.clone(),
-        source: e.source,
-        architecture: None,
-        params: None,
-        quantization: None,
-        context_length: None,
-        size: e.size,
-        path: e.path.clone(),
-        has_projector: e.projector.is_some(),
-        error: None,
-    };
-    match GgufFile::open_with(&e.path, ParseOptions::header_only()) {
-        Ok(g) => {
-            s.architecture = g.architecture().map(str::to_string);
-            s.params = Some(g.total_params());
-            s.quantization = quantization_label(&g);
-            s.context_length = g.arch_key("context_length").and_then(|v| v.as_u64());
-        }
-        Err(err) => s.error = Some(err.to_string()),
-    }
-    s
-}
-
-fn walk_mtimes(dir: &Path, depth: usize, count: &mut u64, newest: &mut u64) {
-    if depth > 6 {
-        return;
-    }
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for ent in rd.flatten() {
-        let Ok(md) = ent.metadata() else { continue };
-        *count += 1;
-        if let Ok(m) = md.modified() {
-            let secs = m.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            *newest = (*newest).max(secs);
-        }
-        if md.is_dir() {
-            walk_mtimes(&ent.path(), depth + 1, count, newest);
-        }
-    }
-}
-
-/// Removes duplicate discoveries of the same entry and links entries sharing weights.
-fn dedup(entries: &mut Vec<ModelEntry>) {
-    let mut seen: HashMap<(String, PathBuf), usize> = HashMap::new();
-    let mut keep = Vec::with_capacity(entries.len());
-    for e in entries.drain(..) {
-        let key = (e.name.clone(), e.path.clone());
-        if seen.contains_key(&key) {
-            continue;
-        }
-        // Plain files that are already known through another source (e.g. Ollama blob).
-        if e.ollama.is_none() && keep.iter().any(|k: &ModelEntry| k.path == e.path) {
-            continue;
-        }
-        seen.insert(key, keep.len());
-        keep.push(e);
-    }
-    let mut by_path: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    for e in &keep {
-        by_path.entry(e.path.clone()).or_default().push(e.name.clone());
-    }
-    for e in &mut keep {
-        if let Some(names) = by_path.get(&e.path) {
-            e.shares_weights_with = names.iter().filter(|n| **n != e.name).cloned().collect();
-        }
-    }
-    *entries = keep;
+/// Directories from `NEURONDUMP_MODEL_DIRS` (OS path-list separator: `;` on Windows, `:` elsewhere).
+pub fn env_model_dirs() -> Vec<PathBuf> {
+    std::env::var_os("NEURONDUMP_MODEL_DIRS")
+        .map(|v| std::env::split_paths(&v).filter(|p| !p.as_os_str().is_empty()).collect())
+        .unwrap_or_default()
 }
