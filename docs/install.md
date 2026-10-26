@@ -1,6 +1,7 @@
 # Install and run
 
 - [Download a ready-made build](#download-a-ready-made-build)
+- [Install from crates.io](#install-from-cratesio)
 - [Build from source: Windows](#windows)
 - [Build from source: Linux](#linux)
 - [Optional tools](#optional-tools)
@@ -40,6 +41,38 @@ with the value in the `.sha256` file.
 For an older version, pick it on the [releases page](https://github.com/aymen94/NeuronDump/releases).
 Then try the first commands from the Windows or Linux section below; they also explain where
 NeuronDump looks for your models.
+
+---
+
+## Install from crates.io
+
+NeuronDump is published on [crates.io](https://crates.io/crates/neurondump). If you already
+have Rust 1.88 or newer (see step 1 of [Windows](#windows) or [Linux](#linux) for the tools),
+you don't need to clone the repository:
+
+```sh
+cargo install neurondump                    # CLI + web interface
+cargo install neurondump --features trace   # + running models (trace, token journey, generation)
+neurondump list
+```
+
+`cargo install` downloads the source, builds it and puts `neurondump` in `~/.cargo/bin`, which
+rustup adds to your `PATH`. To update to the latest version, run the same command again.
+To remove it: `cargo uninstall neurondump`.
+
+You only need the `neurondump` package. Cargo downloads the other NeuronDump crates it needs
+on its own:
+
+| Command | NeuronDump crates it uses |
+|---|---|
+| `cargo install neurondump` | `neurondump-core`, `neurondump-gguf`, `neurondump-cli`, `neurondump-web` |
+| `cargo install neurondump --features trace` | the above + `neurondump-trace` (adds candle; the build takes longer) |
+| `cargo install neurondump --no-default-features --features cli` | CLI only, no web server |
+
+The library crates can also be used on their own in your Rust code, for example
+[`neurondump-gguf`](https://crates.io/crates/neurondump-gguf) as a GGUF reader and writer.
+Their API documentation is on [docs.rs](https://docs.rs/neurondump-core); see
+[Architecture](architecture.md#crates) for what each crate does.
 
 ---
 

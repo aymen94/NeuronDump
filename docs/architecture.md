@@ -7,12 +7,17 @@ How the code is organized. For what NeuronDump reads from a GGUF file and why, s
 
 | Crate | Job | Depends on |
 |---|---|---|
-| `neurondump-gguf` | zero-copy GGUF parser (memory-mapped), dequantization, Q8_0 quantization, GGUF v3 writer | `memmap2`, `half` |
-| `neurondump-core` | **all the logic**: discovery, architecture, tokenizer, templates, stats, analyze, slim, graph, impact, chat rendering, token inspector, edit overlay, bake, jobs | `neurondump-gguf`, `rayon`, `serde` |
-| `neurondump-trace` | the forward pass (candle, CPU): trace, simulation, sweeps, token journey, generation, interventions | `candle-core`, `neurondump-core` |
-| `neurondump-cli` | one-shot commands, the interactive REPL, terminal rendering | `neurondump-core`, `clap`, `rustyline` |
-| `neurondump-web` | axum server, JSON API, embedded frontend (plain ES modules + vendored wamr3d) | `neurondump-core`, `axum`, `rust-embed` |
-| `neurondump` | the binary: wires the front ends and registers the trace backend | features `cli`, `web`, `trace` |
+| [`neurondump-gguf`](https://crates.io/crates/neurondump-gguf) | zero-copy GGUF parser (memory-mapped), dequantization, Q8_0 quantization, GGUF v3 writer | `memmap2`, `half` |
+| [`neurondump-core`](https://crates.io/crates/neurondump-core) | **all the logic**: discovery, architecture, tokenizer, templates, stats, analyze, slim, graph, impact, chat rendering, token inspector, edit overlay, bake, jobs | `neurondump-gguf`, `rayon`, `serde` |
+| [`neurondump-trace`](https://crates.io/crates/neurondump-trace) | the forward pass (candle, CPU): trace, simulation, sweeps, token journey, generation, interventions | `candle-core`, `neurondump-core` |
+| [`neurondump-cli`](https://crates.io/crates/neurondump-cli) | one-shot commands, the interactive REPL, terminal rendering | `neurondump-core`, `clap`, `rustyline` |
+| [`neurondump-web`](https://crates.io/crates/neurondump-web) | axum server, JSON API, embedded frontend (plain ES modules + vendored wamr3d) | `neurondump-core`, `axum`, `rust-embed` |
+| [`neurondump`](https://crates.io/crates/neurondump) | the binary: wires the front ends and registers the trace backend | features `cli`, `web`, `trace` |
+
+All six crates are published on crates.io with the same version. The library crates have API
+docs on docs.rs ([gguf](https://docs.rs/neurondump-gguf), [core](https://docs.rs/neurondump-core),
+[trace](https://docs.rs/neurondump-trace), [cli](https://docs.rs/neurondump-cli),
+[web](https://docs.rs/neurondump-web)); `neurondump` is binary-only, so it has none.
 
 Front ends contain no analysis code. The CLI, the REPL and the web API call the same
 `neurondump_core::App` methods and render the same serializable results, so they always agree.

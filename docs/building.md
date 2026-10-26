@@ -47,6 +47,29 @@ schemas/              JSON Schemas of every output
 docs/                 this documentation + the GitHub Pages site
 ```
 
+## Publishing to crates.io
+
+All crates share the version in the root `Cargo.toml` (`[workspace.package]`). The internal
+dependencies in `[workspace.dependencies]` have both a `path` and a `version`; bump both when
+you release. Then, from the repository root:
+
+```sh
+cargo login                     # once, with a token that has publish-new and publish-update
+cargo publish --workspace       # publishes in dependency order
+```
+
+The order is `neurondump-gguf` → `neurondump-core` → `neurondump-cli` / `neurondump-trace` /
+`neurondump-web` → `neurondump`. To publish one crate at a time, use `cargo publish -p <crate>`
+in that order.
+
+| Message | Fix |
+|---|---|
+| `dependency ... does not specify a version` | add `version = "..."` next to `path` in `[workspace.dependencies]` |
+| `no matching package named ... found` / `timed out waiting for ... to be available` | crates.io hasn't indexed the previous crate yet: wait a few minutes and run `cargo publish -p <next crate>` |
+| `429 Too Many Requests` | crates.io limits how many new crates (or versions) you can publish in a short time: wait until the time in the message |
+| `403 Forbidden: authentication failed` | the token is wrong, expired or truncated: create a new one and run `cargo login` again |
+| `dlltool.exe: program not found` while verifying (Windows GNU) | set up `llvm-dlltool` as in [Windows](#windows), or add `--no-verify` |
+
 ## Documentation
 
 The docs are the Markdown files in `docs/`, built with
