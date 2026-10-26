@@ -24,6 +24,13 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          # Intel build is cross-compiled on the Apple Silicon runner.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
     steps:
       - uses: actions/checkout@v7
 
@@ -40,16 +47,18 @@ jobs:
         shell: bash
         run: |
           NAME=neurondump-${{ matrix.target }}
+          # macOS runners have shasum but not sha256sum.
+          sha() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
           mkdir "$NAME"
           cp README.md LICENSE "$NAME"/
           if [ "${{ matrix.archive }}" = "zip" ]; then
             cp target/${{ matrix.target }}/release/neurondump.exe "$NAME"/
             7z a "$NAME.zip" "$NAME"
-            sha256sum "$NAME.zip" > "$NAME.zip.sha256"
+            sha "$NAME.zip" > "$NAME.zip.sha256"
           else
             cp target/${{ matrix.target }}/release/neurondump "$NAME"/
             tar czf "$NAME.tar.gz" "$NAME"
-            sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+            sha "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
           fi
 
       - uses: actions/upload-artifact@v7
