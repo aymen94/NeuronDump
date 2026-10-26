@@ -1,5 +1,11 @@
 # NeuronDump
 
+[![crates.io](https://img.shields.io/crates/v/neurondump.svg)](https://crates.io/crates/neurondump)
+[![downloads](https://img.shields.io/crates/d/neurondump.svg)](https://crates.io/crates/neurondump)
+[![docs.rs](https://img.shields.io/docsrs/neurondump-core)](https://docs.rs/neurondump-core)
+[![license](https://img.shields.io/crates/l/neurondump.svg)](LICENSE)
+[![release](https://github.com/aymen94/NeuronDump/actions/workflows/release.yml/badge.svg)](https://github.com/aymen94/NeuronDump/actions/workflows/release.yml)
+
 Look inside any local LLM, find the parts it doesn't need, and make it smaller.
 
 NeuronDump reads **GGUF** model files (the format used by **Ollama** and **llama.cpp**) and
@@ -18,6 +24,9 @@ ban…) with undo and a before / after comparison, then bake the edits into a ne
 **Download:** ready-made Windows and Linux builds are on the
 **[releases page](https://github.com/aymen94/NeuronDump/releases)**. Unzip and run `neurondump list`.
 Download steps and checks: **[install guide](docs/install.md#download-a-ready-made-build)**.
+
+**From crates.io:** with [Rust](https://rustup.rs) 1.88 or newer, run `cargo install neurondump`
+(add `--features trace` to also run models).
 
 **Build from source:** you need [Git](https://git-scm.com) and [Rust](https://rustup.rs) 1.88 or newer.
 Step-by-step instructions: **[Windows and Linux install guide](docs/install.md)**.
