@@ -17,13 +17,16 @@ license = "MIT"
 rust-version = "1.88"
 repository = "https://github.com/aymen94/NeuronDump"
 homepage = "https://aymen94.github.io/NeuronDump/"
+readme = "README.md"
+keywords = ["gguf", "llm", "ollama", "interpretability", "llama-cpp"]
+categories = ["command-line-utilities", "science"]
 
 [workspace.dependencies]
-neurondump-gguf = { path = "crates/neurondump-gguf" }
-neurondump-core = { path = "crates/neurondump-core" }
-neurondump-cli = { path = "crates/neurondump-cli" }
-neurondump-web = { path = "crates/neurondump-web" }
-neurondump-trace = { path = "crates/neurondump-trace" }
+neurondump-gguf = { version = "0.1.3", path = "crates/neurondump-gguf" }
+neurondump-core = { version = "0.1.3", path = "crates/neurondump-core" }
+neurondump-cli = { version = "0.1.3", path = "crates/neurondump-cli" }
+neurondump-web = { version = "0.1.3", path = "crates/neurondump-web" }
+neurondump-trace = { version = "0.1.3", path = "crates/neurondump-trace" }
 
 memmap2 = "0.9"
 serde = { version = "1", features = ["derive"] }

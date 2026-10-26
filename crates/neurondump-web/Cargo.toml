@@ -7,6 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme.workspace = true
+keywords = ["gguf", "llm", "ollama", "interpretability", "visualization"]
+categories = ["visualization", "science"]
 
 [dependencies]
 neurondump-core.workspace = true
