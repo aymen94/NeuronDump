@@ -145,11 +145,14 @@ Details: [Interventions](docs/interventions.md), [Web interface](docs/web-ui.md)
 
 ## Supported architectures
 
-- **Static analysis, graph, impact, slim, tokens, bake:** any GGUF architecture (layer kinds are read
-  from the tensors: attention, linear attention / SSM, MoE, dense).
+- **Static analysis, graph, impact, slim, bake:** any GGUF architecture (layer kinds are read
+  from the tensors: attention, linear attention / SSM, MoE, dense). **Tokenization** matches
+  llama.cpp for BPE (llama3, qwen2, qwen3) and SPM (gemma, phi3); not yet for `gemma4`.
 - **Runtime** (`--features trace`: trace, journey, timeline, simulation, sweeps, live edits): `llama`,
-  `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `bert`, `nomic-bert`. No MoE or hybrid
-  (Qwen 3.5) forward pass yet. See [Limitations](docs/limitations.md).
+  `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `bert`, `nomic-bert`, checked against
+  llama.cpp (gemma2 and Phi-3 128k only approximate). No MoE or hybrid (Qwen 3.5, Gemma 4) forward
+  pass yet. See [Limitations](docs/limitations.md) and
+  [Gemma 4, Gemma, Gemma 2 and Phi-3](docs/new-models.md).
 
 The same works from the command line:
 
@@ -206,7 +209,7 @@ A short illustrated explanation is on the [website](https://aymen94.github.io/Ne
 ## Status
 
 Early version, tested on Windows with Ollama models. Known gaps are listed in
-[Limitations](docs/limitations.md) and at the end of [TEST.md](TEST.md). Bug reports and ideas: [issues](https://github.com/aymen94/NeuronDump/issues).
+[Limitations](docs/limitations.md); the manual checks are in [TEST.md](TEST.md). Bug reports and ideas: [issues](https://github.com/aymen94/NeuronDump/issues).
 
 ## License
 

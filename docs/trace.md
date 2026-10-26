@@ -78,6 +78,11 @@ input token contributes to the final embedding.
 
 `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `bert`, `nomic-bert`.
 
+Checked against llama.cpp / Ollama on the same files: llama, qwen2, qwen3 and gemma give the same
+tokens and nearly the same probabilities; gemma2's probabilities are too sharp (soft-capping is not
+applied) and Phi-3 128k models drift (LongRoPE is not applied). Details in
+[Gemma 4, Gemma, Gemma 2 and Phi-3](new-models.md).
+
 Other models (for example hybrid Qwen 3.5) report "trace unsupported". All the other commands
 still work on them. Tracing runs on the CPU and loads the whole model into memory: an 8B
 model at 4 bits needs about 5 GB of RAM.
