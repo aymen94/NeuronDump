@@ -1,50 +1,19 @@
-//! Streaming dequantization (ports of ggml's `dequantize_row_*` reference kernels).
+//! Per-type dequantization kernels (`dequantize_into`), ported from ggml's reference code.
 
-use half::{bf16, f16};
+use super::*;
 
-use crate::error::{GgufError, Result};
-use crate::file::{Endianness, GgufFile, TensorInfo};
-use crate::types::GgmlType;
+pub(super) const QK_K: usize = 256;
 
-const QK_K: usize = 256;
+pub(super) const KVALUES_IQ4NL: [i8; 16] = [-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113];
 
-const KVALUES_IQ4NL: [i8; 16] = [-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113];
-const KVALUES_MXFP4: [i8; 16] = [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
+pub(super) const KVALUES_MXFP4: [i8; 16] = [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
 
 #[inline]
-fn f16_at(b: &[u8], i: usize) -> f32 {
+pub(super) fn f16_at(b: &[u8], i: usize) -> f32 {
     f16::from_le_bytes([b[i], b[i + 1]]).to_f32()
 }
 
-/// Whether [`dequantize_into`] supports this type.
-pub fn can_dequantize(ty: GgmlType) -> bool {
-    matches!(
-        ty,
-        GgmlType::F32
-            | GgmlType::F16
-            | GgmlType::BF16
-            | GgmlType::F64
-            | GgmlType::I8
-            | GgmlType::I16
-            | GgmlType::I32
-            | GgmlType::Q4_0
-            | GgmlType::Q4_1
-            | GgmlType::Q5_0
-            | GgmlType::Q5_1
-            | GgmlType::Q8_0
-            | GgmlType::Q8_1
-            | GgmlType::Q2_K
-            | GgmlType::Q3_K
-            | GgmlType::Q4_K
-            | GgmlType::Q5_K
-            | GgmlType::Q6_K
-            | GgmlType::Q8_K
-            | GgmlType::MXFP4
-    ) || ty == GgmlType(20) // IQ4_NL
-        || ty == GgmlType(23) // IQ4_XS
-}
-
-fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
+pub(super) fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
     if j < 4 {
         (q[j] & 63, q[j + 4] & 63)
     } else {
@@ -363,108 +332,4 @@ pub fn dequantize_into(ty: GgmlType, src: &[u8], dst: &mut [f32]) -> Result<()> 
         _ => unreachable!("guarded by can_dequantize"),
     }
     Ok(())
-}
-
-/// Streaming f32 iterator over a tensor; dequantizes a bounded chunk at a time.
-pub struct Dequantizer<'a> {
-    ty: GgmlType,
-    src: &'a [u8],
-    block_size: usize,
-    type_size: usize,
-    blocks_per_chunk: usize,
-    buf: Vec<f32>,
-    pos: usize,
-}
-
-impl Iterator for Dequantizer<'_> {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<f32> {
-        if self.pos == self.buf.len() {
-            if self.src.is_empty() {
-                return None;
-            }
-            let n_blocks = (self.src.len() / self.type_size).min(self.blocks_per_chunk);
-            if n_blocks == 0 {
-                return None;
-            }
-            let (chunk, rest) = self.src.split_at(n_blocks * self.type_size);
-            self.src = rest;
-            self.buf.resize(n_blocks * self.block_size, 0.0);
-            if dequantize_into(self.ty, chunk, &mut self.buf).is_err() {
-                return None;
-            }
-            self.pos = 0;
-        }
-        let v = self.buf[self.pos];
-        self.pos += 1;
-        Some(v)
-    }
-}
-
-impl GgufFile {
-    fn check_dequant(&self, t: &TensorInfo) -> Result<()> {
-        if self.endianness == Endianness::Big {
-            return Err(GgufError::Malformed { offset: 0, msg: "big-endian tensor data is not supported".into() });
-        }
-        if !can_dequantize(t.ggml_type) {
-            return Err(GgufError::Malformed {
-                offset: 0,
-                msg: format!("dequantization of {} (tensor {}) is not implemented", t.ggml_type, t.name),
-            });
-        }
-        Ok(())
-    }
-
-    /// Streams the tensor's values as f32 without materializing the whole tensor.
-    pub fn dequantize(&self, name: &str) -> Result<Dequantizer<'_>> {
-        let t = self.tensor(name).ok_or_else(|| GgufError::NoSuchTensor(name.to_string()))?;
-        self.dequantize_info(t)
-    }
-
-    pub fn dequantize_info(&self, t: &TensorInfo) -> Result<Dequantizer<'_>> {
-        self.check_dequant(t)?;
-        let l = t.ggml_type.layout().expect("checked");
-        let blocks_per_chunk = (65536 / l.block_size as usize).max(1);
-        Ok(Dequantizer {
-            ty: t.ggml_type,
-            src: self.info_bytes(t)?,
-            block_size: l.block_size as usize,
-            type_size: l.type_size as usize,
-            blocks_per_chunk,
-            buf: Vec::new(),
-            pos: 0,
-        })
-    }
-
-    /// Dequantizes rows `[start, start + n)` of the tensor viewed as `[n_rows, row_len]`.
-    pub fn dequantize_rows(&self, t: &TensorInfo, start: u64, n: u64, out: &mut Vec<f32>) -> Result<()> {
-        self.check_dequant(t)?;
-        let l = t.ggml_type.layout().expect("checked");
-        let row_len = t.row_len();
-        if row_len % l.block_size != 0 || start + n > t.n_rows() {
-            return Err(GgufError::Malformed { offset: 0, msg: format!("bad row range for {}", t.name) });
-        }
-        let row_bytes = row_len / l.block_size * l.type_size;
-        let bytes = self.info_bytes(t)?;
-        let src = &bytes[(start * row_bytes) as usize..((start + n) * row_bytes) as usize];
-        out.resize((n * row_len) as usize, 0.0);
-        dequantize_into(t.ggml_type, src, out)
-    }
-}
-
-/// Quantizes f32 values to Q8_0 (ggml `quantize_row_q8_0_ref`). `src.len()` must be a
-/// multiple of 32.
-pub fn quantize_q8_0(src: &[f32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(src.len() / 32 * 34);
-    for block in src.chunks_exact(32) {
-        let amax = block.iter().fold(0f32, |m, x| m.max(x.abs()));
-        let d = amax / 127.0;
-        let id = if d != 0.0 { 1.0 / d } else { 0.0 };
-        out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
-        for &x in block {
-            out.push((x * id).round() as i8 as u8);
-        }
-    }
-    out
 }

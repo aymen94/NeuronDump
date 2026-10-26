@@ -1,138 +1,12 @@
-//! GGUF file: header parsing and zero-copy tensor access.
+//! Header parsing: magic / version, metadata, tensor infos, alignment, sizes and bounds warnings.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::path::Path;
-
-use indexmap::IndexMap;
-use memmap2::Mmap;
-use serde::Serialize;
-
-use crate::error::{GgufError, Result};
-use crate::reader::Reader;
-use crate::types::GgmlType;
-use crate::value::{Value, ValueType};
-
-pub const GGUF_MAGIC: &[u8; 4] = b"GGUF";
-pub const DEFAULT_ALIGNMENT: u64 = 32;
-const MAX_DIMS: u32 = 64;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Endianness {
-    Little,
-    Big,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ParseOptions {
-    /// Decode metadata arrays (vocabularies, merges, scores...). When false only their
-    /// type and length are recorded, which makes header reads of big vocabularies cheaper.
-    pub load_arrays: bool,
-}
-
-impl Default for ParseOptions {
-    fn default() -> Self {
-        Self { load_arrays: true }
-    }
-}
-
-impl ParseOptions {
-    pub fn header_only() -> Self {
-        Self { load_arrays: false }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TensorInfo {
-    pub name: String,
-    /// ggml order: `dims[0]` is the contiguous (row) dimension.
-    pub dims: Vec<u64>,
-    pub ggml_type: GgmlType,
-    /// Offset relative to the start of the tensor data section.
-    pub offset: u64,
-    pub n_elements: u64,
-    pub n_bytes: u64,
-    /// True when `n_bytes` was derived from neighbouring offsets (unknown type or a
-    /// shape that is not a whole number of blocks).
-    pub size_estimated: bool,
-}
-
-impl TensorInfo {
-    /// Rows of the tensor seen as a 2D matrix `[n_rows, dims[0]]`.
-    pub fn n_rows(&self) -> u64 {
-        self.dims.iter().skip(1).product::<u64>().max(1)
-    }
-
-    pub fn row_len(&self) -> u64 {
-        self.dims.first().copied().unwrap_or(1)
-    }
-}
-
-enum Storage {
-    Mmap(Mmap),
-    Bytes(Vec<u8>),
-}
-
-impl Storage {
-    fn bytes(&self) -> &[u8] {
-        match self {
-            Storage::Mmap(m) => m,
-            Storage::Bytes(b) => b,
-        }
-    }
-}
-
-pub struct GgufFile {
-    pub version: u32,
-    pub endianness: Endianness,
-    pub alignment: u64,
-    /// Absolute offset of the tensor data section.
-    pub data_offset: u64,
-    /// Size of the header (everything before the padded data section).
-    pub header_size: u64,
-    pub file_size: u64,
-    pub metadata: IndexMap<String, Value>,
-    pub tensors: Vec<TensorInfo>,
-    /// Non-fatal oddities found while parsing.
-    pub warnings: Vec<String>,
-    index: HashMap<String, usize>,
-    storage: Storage,
-}
-
-impl std::fmt::Debug for GgufFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GgufFile")
-            .field("version", &self.version)
-            .field("n_kv", &self.metadata.len())
-            .field("n_tensors", &self.tensors.len())
-            .finish()
-    }
-}
+use super::*;
 
 impl GgufFile {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with(path, ParseOptions::default())
-    }
-
-    pub fn open_with(path: impl AsRef<Path>, opts: ParseOptions) -> Result<Self> {
-        let file = File::open(path.as_ref())?;
-        let len = file.metadata()?.len();
-        if len < 8 {
-            return Err(GgufError::Truncated { offset: 0, needed: 8, len });
-        }
-        // SAFETY: the map is read-only; concurrent truncation by another process is the
-        // usual mmap caveat and is accepted here (Ollama never rewrites blobs in place).
-        let mmap = unsafe { Mmap::map(&file)? };
-        Self::parse(Storage::Mmap(mmap), opts)
-    }
-
-    pub fn from_bytes(bytes: Vec<u8>, opts: ParseOptions) -> Result<Self> {
-        Self::parse(Storage::Bytes(bytes), opts)
-    }
-
-    fn parse(storage: Storage, opts: ParseOptions) -> Result<Self> {
+    pub(super) fn parse(storage: Storage, declared_size: Option<u64>, opts: ParseOptions) -> Result<Self> {
         let data = storage.bytes();
+        // Sanity checks below compare counts against what is left of the real file.
+        let total = declared_size.unwrap_or(data.len() as u64);
         let mut warnings = Vec::new();
         let mut r = Reader::new(data);
 
@@ -170,7 +44,7 @@ impl GgufFile {
         // Each KV needs at least a key length + type id; each tensor info at least
         // name length + n_dims + type + offset.
         let min_kv = if r.wide { 12 } else { 8 };
-        if n_kv.saturating_mul(min_kv) > r.remaining() as u64 {
+        if n_kv.saturating_mul(min_kv) > total.saturating_sub(r.pos as u64) {
             return Err(r.malformed(format!("metadata count {n_kv} exceeds file size")));
         }
 
@@ -210,7 +84,7 @@ impl GgufFile {
         };
 
         let min_ti = if r.wide { 8 + 4 + 4 + 8 } else { 4 + 4 + 4 + 8 };
-        if n_tensors.saturating_mul(min_ti) > r.remaining() as u64 {
+        if n_tensors.saturating_mul(min_ti) > total.saturating_sub(r.pos as u64) {
             return Err(r.malformed(format!("tensor count {n_tensors} exceeds file size")));
         }
 
@@ -266,7 +140,7 @@ impl GgufFile {
 
         let header_size = r.pos as u64;
         let data_offset = header_size.div_ceil(alignment) * alignment;
-        let file_size = data.len() as u64;
+        let file_size = total;
         let data_len = file_size.saturating_sub(data_offset);
 
         // Derive sizes we could not compute from the gap to the next tensor.
@@ -309,75 +183,4 @@ impl GgufFile {
         })
     }
 
-    /// Raw bytes of the whole file.
-    pub fn bytes(&self) -> &[u8] {
-        self.storage.bytes()
-    }
-
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.metadata.get(key)
-    }
-
-    pub fn get_str(&self, key: &str) -> Option<&str> {
-        self.get(key).and_then(Value::as_str)
-    }
-
-    pub fn get_u64(&self, key: &str) -> Option<u64> {
-        self.get(key).and_then(Value::as_u64)
-    }
-
-    pub fn get_f64(&self, key: &str) -> Option<f64> {
-        self.get(key).and_then(Value::as_f64)
-    }
-
-    pub fn architecture(&self) -> Option<&str> {
-        self.get_str("general.architecture")
-    }
-
-    /// `<arch>.<suffix>` lookup.
-    pub fn arch_key(&self, suffix: &str) -> Option<&Value> {
-        let arch = self.architecture()?;
-        self.get(&format!("{arch}.{suffix}"))
-    }
-
-    pub fn tensor(&self, name: &str) -> Option<&TensorInfo> {
-        self.index.get(name).map(|&i| &self.tensors[i])
-    }
-
-    pub fn tensor_index(&self, name: &str) -> Option<usize> {
-        self.index.get(name).copied()
-    }
-
-    pub fn total_params(&self) -> u64 {
-        self.tensors.iter().map(|t| t.n_elements).sum()
-    }
-
-    pub fn tensor_data_bytes(&self) -> u64 {
-        self.tensors.iter().map(|t| t.n_bytes).sum()
-    }
-
-    pub fn info_bytes(&self, t: &TensorInfo) -> Result<&[u8]> {
-        let start = self.data_offset.saturating_add(t.offset);
-        let end = start.saturating_add(t.n_bytes);
-        if end > self.file_size {
-            return Err(GgufError::TensorOutOfBounds {
-                name: t.name.clone(),
-                start,
-                end,
-                len: self.file_size,
-            });
-        }
-        Ok(&self.bytes()[start as usize..end as usize])
-    }
-
-    /// Zero-copy view of a tensor's raw (possibly quantized) bytes.
-    pub fn tensor_bytes(&self, name: &str) -> Result<&[u8]> {
-        let t = self.tensor(name).ok_or_else(|| GgufError::NoSuchTensor(name.to_string()))?;
-        self.info_bytes(t)
-    }
-
-    /// Element type of a metadata array, if `key` is an array.
-    pub fn array_elem_type(&self, key: &str) -> Option<ValueType> {
-        self.get(key).and_then(Value::as_array).map(|a| a.elem_type())
-    }
 }
