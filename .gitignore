@@ -3,3 +3,4 @@
 /.cargo/config.toml
 *.prune.json
 /site/
+/docs/demo/

@@ -7,10 +7,17 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
+      # The browser demo (docs/demo/) is built from these.
+      - "crates/neurondump-gguf/**"
+      - "crates/neurondump-core/**"
+      - "crates/neurondump-wasm/**"
+      - "crates/neurondump-web/frontend/**"
+      - "scripts/build-wasm-demo.sh"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "crates/neurondump-wasm/**"
   workflow_dispatch:
 
 permissions:
@@ -27,6 +34,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - id: wasm-bindgen
+        run: echo "version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"//p')" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+      - name: Build the browser demo (docs/demo/)
+        run: scripts/build-wasm-demo.sh
       - uses: actions/setup-python@v7
         with:
           python-version: "3.x"

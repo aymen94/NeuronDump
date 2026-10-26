@@ -1,0 +1,23 @@
+[package]
+name = "neurondump-wasm"
+description = "NeuronDump static GGUF inspection compiled to WebAssembly (in-browser demo)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Static inspection only: no filesystem, threads, job system or trace runtime.
+neurondump-core = { path = "../neurondump-core", default-features = false }
+neurondump-gguf.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+serde_urlencoded = "0.7"
+wasm-bindgen = "0.2"
