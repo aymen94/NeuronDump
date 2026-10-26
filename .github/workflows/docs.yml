@@ -46,7 +46,7 @@ jobs:
         with:
           tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
       - name: Build the browser demo (docs/demo/)
-        run: scripts/build-wasm-demo.sh
+        run: sh scripts/build-wasm-demo.sh
       - uses: actions/setup-python@v7
         with:
           python-version: "3.x"

@@ -101,7 +101,7 @@ Build it into `docs/demo/` (ignored by git; the docs workflow builds it before `
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version <version of wasm-bindgen in Cargo.lock> --locked
-scripts/build-wasm-demo.sh
+sh scripts/build-wasm-demo.sh
 mkdocs serve          # then open http://127.0.0.1:8000/demo/
 ```
 
