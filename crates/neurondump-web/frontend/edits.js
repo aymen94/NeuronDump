@@ -22,6 +22,14 @@ const OPS = {
   template: { label: 'chat template', fields: [['text', 'Go template ({{ .System }}, {{ .Prompt }})', 'textarea']] },
 };
 
+// Edit types as shown in the panel, grouped so the right one is one click away.
+const GROUPS = [
+  ['Nodes', ['scale', 'zero', 'skip', 'ablate']],
+  ['Tokens', ['ban', 'boost', 'embed', 'force']],
+  ['Activations', ['steer', 'patch']],
+  ['Generation', ['sampling', 'system', 'template']],
+];
+
 /** `#123`, `123` or a text that tokenizes to one token -> id. */
 export async function resolveToken(id, s) {
   const t = String(s ?? '').trim();
@@ -52,42 +60,52 @@ async function buildOp(id, op, vals) {
 }
 
 function addForm(id, prefill) {
-  const sel = el('select', {}, Object.entries(OPS).map(([k, v]) => el('option', { value: k, selected: k === prefill?.op }, v.label)));
-  const fieldsBox = el('div', { class: 'edit-fields' });
+  let op = OPS[prefill?.op] ? prefill.op : 'scale';
   let inputs = {};
+  const fieldsBox = el('div', { class: 'edit-fields' });
+  const apply = el('button', { class: 'primary' });
+  const buttons = {};
   const render = () => {
     inputs = {};
-    fieldsBox.replaceChildren(...OPS[sel.value].fields.map(([k, label, type, def]) => {
+    for (const [k, b] of Object.entries(buttons)) b.setAttribute('aria-checked', String(k === op));
+    apply.textContent = `Apply: ${OPS[op].label}`;
+    fieldsBox.replaceChildren(...OPS[op].fields.map(([k, label, type, def]) => {
       const v = prefill?.[k] ?? def ?? '';
       const inp = type === 'textarea' ? el('textarea', { rows: 3, placeholder: label }, v)
         : type === 'checkbox' ? el('input', { type: 'checkbox', checked: !!v })
           : el('input', { type: type === 'number' ? 'number' : 'text', step: 'any', placeholder: label, value: v, size: type === 'number' ? 6 : 28 });
       inputs[k] = inp;
-      return el('label', { class: 'edit-field' }, label, ' ', inp);
+      return type === 'checkbox'
+        ? el('label', { class: 'edit-field edit-check' }, inp, ' ', label)
+        : el('label', { class: `edit-field${type === 'textarea' ? ' wide' : ''}` }, el('span', {}, label), inp);
     }));
   };
-  sel.addEventListener('change', () => { prefill = null; render(); });
-  render();
-  const add = el('button', { class: 'primary', onclick: async () => {
+  const pick = (k) => { op = k; prefill = null; render(); };
+  const groups = GROUPS.map(([name, ops]) => el('div', { class: 'edit-group' },
+    el('span', { class: 'muted small' }, name),
+    el('span', { class: 'segmented', role: 'radiogroup' }, ops.map((k) => (buttons[k] = el('button', { role: 'radio', title: OPS[k].label, onclick: () => pick(k) }, k))))));
+  apply.addEventListener('click', async () => {
     const vals = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.type === 'checkbox' ? i.checked : i.value]));
-    try { await pushEdit(id, await buildOp(id, sel.value, vals)); toast('edit added'); } catch (e) { toast(e.message); }
-  } }, 'Add edit');
-  return el('div', { class: 'edit-add' }, el('div', { class: 'row' }, 'add', sel, add), fieldsBox);
+    try { await pushEdit(id, await buildOp(id, op, vals)); toast('edit added'); } catch (e) { toast(e.message); }
+  });
+  render();
+  return el('div', { class: 'edit-section' }, el('h4', {}, 'New edit'), el('div', { class: 'edit-groups' }, groups), fieldsBox, el('div', { class: 'row' }, apply));
 }
 
 function stackView(id, v) {
   if (!v) return el('p', { class: 'muted' }, 'loading…');
   const list = v.edits.length ? el('ul', { class: 'plain edit-list' }, v.edits.map((e) => el('li', { class: e.enabled ? '' : 'off' },
-    el('input', { type: 'checkbox', checked: e.enabled, title: 'on / off', onchange: () => editAction(id, 'POST', `/${e.id}/toggle`).catch((x) => toast(x.message)) }),
-    ` #${e.id} `, el('span', {}, e.label), ' ',
+    el('label', {}, el('input', { type: 'checkbox', checked: e.enabled, title: 'on / off', onchange: () => editAction(id, 'POST', `/${e.id}/toggle`).catch((x) => toast(x.message)) }),
+      el('span', { class: 'muted small' }, `#${e.id}`), el('span', {}, e.label)),
     el('button', { class: 'small', title: 'remove', onclick: () => editAction(id, 'DELETE', `/${e.id}`).catch((x) => toast(x.message)) }, '×'))))
     : el('p', { class: 'muted' }, 'No edits: this is the original model.');
-  return el('div', {},
-    el('div', { class: 'row' },
-      el('strong', {}, `Edits (${v.active} on)`),
-      el('button', { disabled: !v.can_undo, onclick: () => editAction(id, 'POST', '/undo') }, '↶ undo'),
-      el('button', { disabled: !v.can_redo, onclick: () => editAction(id, 'POST', '/redo') }, '↷ redo'),
-      el('button', { disabled: !v.edits.length, title: 'Back to the original model (undoable)', onclick: () => editAction(id, 'POST', '/restore') }, 'restore all')),
+  return el('div', { class: 'edit-section' },
+    el('div', { class: 'edit-head' },
+      el('h4', {}, `Edits (${v.active} on)`),
+      el('span', { class: 'row' },
+        el('button', { class: 'small', disabled: !v.can_undo, onclick: () => editAction(id, 'POST', '/undo') }, '↶ undo'),
+        el('button', { class: 'small', disabled: !v.can_redo, onclick: () => editAction(id, 'POST', '/redo') }, '↷ redo'),
+        el('button', { class: 'small', disabled: !v.edits.length, title: 'Back to the original model (undoable)', onclick: () => editAction(id, 'POST', '/restore') }, 'restore all'))),
     list,
     v.error ? el('p', { class: 'error' }, v.error) : '',
     v.compiled?.touched?.length ? el('p', { class: 'muted small' }, 'changed nodes: ', v.compiled.touched.join(', ')) : '',
@@ -109,11 +127,14 @@ function snapshotsView(id, v) {
       toast(`imported ${r.edits.length} edit(s)`);
     } catch (e) { toast(e.message); }
   } });
-  return el('div', { class: 'row small' },
-    name, el('button', { onclick: async () => { try { setEdits(id, await api(`/models/${id}/snapshots`, { method: 'POST', body: { name: name.value } })); toast('saved'); } catch (e) { toast(e.message); } } }, 'save'),
-    pick, el('button', { disabled: !v?.snapshots?.length, onclick: async () => { try { setEdits(id, await api(`/models/${id}/snapshots`, { method: 'POST', body: { name: pick.value, action: 'load' } })); toast('loaded'); } catch (e) { toast(e.message); } } }, 'load'),
-    el('a', { href: downloadUrl(`/models/${id}/edits/export`) }, 'export edits.json'),
-    el('label', {}, 'import ', file));
+  return el('div', { class: 'edit-section' }, el('h4', {}, 'Snapshots and files'),
+    el('div', { class: 'row small' },
+      name, el('button', { onclick: async () => { try { setEdits(id, await api(`/models/${id}/snapshots`, { method: 'POST', body: { name: name.value } })); toast('saved'); } catch (e) { toast(e.message); } } }, 'save'),
+      v?.snapshots?.length ? [pick, el('button', { onclick: async () => { try { setEdits(id, await api(`/models/${id}/snapshots`, { method: 'POST', body: { name: pick.value, action: 'load' } })); toast('loaded'); } catch (e) { toast(e.message); } } }, 'load')]
+        : el('span', { class: 'muted' }, 'no snapshots yet')),
+    el('div', { class: 'row small' },
+      el('a', { href: downloadUrl(`/models/${id}/edits/export`) }, 'export edits.json'),
+      el('label', {}, 'import ', file)));
 }
 
 function bakeView(id) {
@@ -140,7 +161,8 @@ function bakeView(id) {
         r.notes.map((n) => el('p', { class: 'muted' }, n))));
     } catch (e) { out.replaceChildren(errorBox(e)); }
   };
-  return el('div', {}, el('div', { class: 'row small' }, 'bake into a new GGUF', name, el('button', { onclick: go }, 'Bake')), out);
+  return el('div', { class: 'edit-section' }, el('h4', {}, 'Bake into a new GGUF'),
+    el('div', { class: 'row small' }, name, el('button', { onclick: go }, 'Bake')), out);
 }
 
 const fmtTok = (v) => v.map((t) => `"${esc(t.text)}" ${t.prob.toFixed(3)}`).join('  ');
@@ -199,7 +221,7 @@ function compareBox(id) {
       out.replaceChildren(compareView(await api(`/jobs/${j.id}/result`)));
     } catch (e) { out.replaceChildren(errorBox(e)); }
   };
-  return el('div', { class: 'edit-compare' },
+  return el('div', { class: 'edit-section' },
     el('h4', {}, 'Before / after'),
     el('div', { class: 'row' }, prompt, 'tokens', tokens, el('label', {}, chat, ' chat'), el('button', { class: 'primary', onclick: run }, 'Compare')),
     el('details', {}, el('summary', {}, 'corpus'), corpus),

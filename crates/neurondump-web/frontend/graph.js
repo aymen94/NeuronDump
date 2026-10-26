@@ -4,13 +4,14 @@
 // layouts) and the 3D dataflow view (flow3d.js) with the token flow animation. Node ids,
 // selection, cuts, edits and highlights are shared between them.
 
-import { api, qs, runJob } from './api.js';
+import { api, qs, runJob, isLocal } from './api.js';
 import { el, bytes, count, esc, table, errorBox, toast, store } from './ui.js';
 import { jobWithProgress, planView } from './views.js';
 import { createGraph3D } from './graph3d.js';
 import { createFlow3D } from './flow3d.js';
 import { noGpuMessage } from './wamr.js';
 import { session, editedNodes, loadEdits, pushEdit } from './session.js';
+import { diffRows } from './diff.js';
 
 const LEVELS = ['section', 'layer', 'block', 'tensor'];
 const LAYOUTS3D = { flow: 'dataflow', tower: 'tower', city: 'city', force: 'force' };
@@ -36,7 +37,7 @@ export async function graph(id, params) {
   const state = {
     level: params?.get('level') || store.get('nd-graph-level') || 'layer',
     groupBy: params?.get('group_by') || 'section',
-    color: store.get('nd-graph-color') || 'removable',
+    color: params?.get('color') || store.get('nd-graph-color') || 'removable',
     expand: new Set((params?.get('expand') || '').split(',').filter(Boolean)),
     selection: [],
     view: null,
@@ -54,7 +55,7 @@ export async function graph(id, params) {
   }
   const levelSel = selectEl(LEVELS, state.level, 'level');
   const groupSel = selectEl(GROUPS, state.groupBy, 'group by');
-  const colorSel = selectEl([...COLORS, 'damage', 'flow'], state.color, 'color by');
+  const colorSel = selectEl(isLocal() ? COLORS : [...COLORS, 'damage', 'flow', 'diff'], state.color, 'color by');
   const search = el('input', { type: 'search', placeholder: 'search nodes / tensors (Enter flies to it)', size: 26 });
   const info = el('span', { class: 'muted' });
   const backendBadge = el('span', { class: 'badge-backend', title: 'wamr3d renderer backend (auto: WebGPU, else WebGL 2)' }, '…');
@@ -99,6 +100,31 @@ export async function graph(id, params) {
     }
     return out;
   };
+  // Diff overlay: node id -> metrics from the last diff with this model as A. Colors are
+  // relative L2 normalized within each node kind (layers vs layers, blocks vs blocks, ...).
+  let diffCache = null;
+  const diffIndex = () => {
+    const r = s.diff;
+    if (!r) return null;
+    if (diffCache?.r === r) return diffCache;
+    const byId = new Map();
+    for (const g of r.groups) byId.set(g.id, g);
+    for (const t of r.tensors) byId.set(t.id, { ...t, kind: 'tensor' });
+    const max = new Map();
+    for (const g of byId.values()) max.set(g.kind, Math.max(max.get(g.kind) ?? 0, g.rel_l2));
+    diffCache = { r, byId, max };
+    return diffCache;
+  };
+  // A node's own diff, else its closest ancestor's (fine nodes such as heads or neuron buckets).
+  const diffOf = (nid) => {
+    const d = diffIndex();
+    if (!d) return null;
+    for (let c = nid; c; c = c.includes('.') ? c.slice(0, c.lastIndexOf('.')) : null) {
+      const g = d.byId.get(c);
+      if (g) return { g, own: c === nid, score: g.rel_l2 / Math.max(d.max.get(g.kind) ?? 0, 1e-12) };
+    }
+    return null;
+  };
   function colorOf(n, byId) {
     switch (state.color) {
       case 'section': return catColor('s:' + sectionOf(n.id, byId));
@@ -109,6 +135,10 @@ export async function graph(id, params) {
         if (!state.damage) return '#dddddd';
         const d = state.damage.get(n.id) ?? (n.layer != null ? state.damage.get(`layer.${n.layer}`) : undefined);
         return d === undefined ? '#dddddd' : heat(d);
+      }
+      case 'diff': {
+        const d = diffOf(n.id);
+        return d ? heat(d.score) : '#dddddd';
       }
       case 'flow': {
         const v = n.layer != null ? flowValues().get(n.layer) : undefined;
@@ -260,6 +290,12 @@ export async function graph(id, params) {
 
   // --- node detail ---------------------------------------------------------------------------
   const edit = (op, label) => el('button', { class: 'small', onclick: async () => { try { await pushEdit(id, op); toast(`edit added: ${label}`); } catch (e) { toast(e.message); } } }, label);
+  function diffSide(nid) {
+    const d = diffOf(nid);
+    if (!d) return [];
+    const head = el('tr', {}, el('th', { colspan: 2 }, `diff vs ${s.diff.b.name}${d.own ? '' : ` (from ${d.g.id})`}`));
+    return [head, ...diffRows(d.g).map(([k, v]) => el('tr', {}, el('th', {}, k), el('td', {}, v)))];
+  }
   async function showNode(nid) {
     side.replaceChildren(el('p', { class: 'muted' }, 'Loading…'));
     try {
@@ -281,13 +317,14 @@ export async function graph(id, params) {
           el('tr', {}, el('th', {}, 'importance'), el('td', {}, `${n.importance.score.toFixed(2)} — ${n.importance.source}`)),
           stats ? el('tr', {}, el('th', {}, 'weights'), el('td', {}, stats)) : '',
           n.activation ? el('tr', {}, el('th', {}, 'activation'), el('td', {}, el('code', {}, JSON.stringify(n.activation)))) : '',
-          n.info ? el('tr', {}, el('th', {}, 'info'), el('td', {}, el('code', {}, JSON.stringify(n.info)))) : '')),
+          n.info ? el('tr', {}, el('th', {}, 'info'), el('td', {}, el('code', {}, JSON.stringify(n.info)))) : '',
+          ...diffSide(n.id))),
         el('div', { class: 'row' },
-          el('button', { class: cut ? '' : 'primary', onclick: () => { toggleCut(n.id); showNode(n.id); } }, cut ? 'Uncut' : 'Cut this'),
+          isLocal() ? '' : el('button', { class: cut ? '' : 'primary', onclick: () => { toggleCut(n.id); showNode(n.id); } }, cut ? 'Uncut' : 'Cut this'),
           (n.lazy || d.children.length) ? el('button', { onclick: () => toggleExpand(n.id) }, state.expand.has(n.id) ? 'Collapse' : 'Expand') : '',
           el('button', { title: 'Fly the camera to this node', onclick: () => { const r = cur(); if (r?.focus) r.focus(n.id); else r?.fit([n.id]); } }, 'Focus'),
-          (n.kind === 'block' && n.block === 'attention') ? el('button', { onclick: () => runSweep('head', n.layer) }, `Sweep heads of layer ${n.layer}`) : ''),
-        el('div', { class: 'row edit-quick' }, el('strong', {}, 'Edit:'),
+          (n.kind === 'block' && n.block === 'attention' && !isLocal()) ? el('button', { onclick: () => runSweep('head', n.layer) }, `Sweep heads of layer ${n.layer}`) : ''),
+        isLocal() ? '' : el('div', { class: 'row edit-quick' }, el('strong', {}, 'Edit:'),
           edit({ op: 'zero', target: n.id }, 'zero'),
           scalable ? [edit({ op: 'scale', target: n.id, factor: 0.5 }, '×0.5'), edit({ op: 'scale', target: n.id, factor: 2 }, '×2'),
             factor, el('button', { class: 'small', onclick: () => pushEdit(id, { op: 'scale', target: n.id, factor: Number(factor.value) }).then(() => toast('edit added')).catch((e) => toast(e.message)) }, 'scale')] : '',
@@ -298,7 +335,7 @@ export async function graph(id, params) {
           { label: 'size', get: (c) => bytes(c.bytes), num: true, sort: (c) => c.bytes },
           { label: 'removable', get: (c) => c.removable },
           { label: 'imp', get: (c) => c.importance.score.toFixed(2), num: true },
-          { label: '', get: (c) => el('button', { onclick: () => { toggleCut(c.id); showNode(n.id); } }, state.selection.includes(c.id) ? 'uncut' : 'cut') },
+          ...(isLocal() ? [] : [{ label: '', get: (c) => el('button', { onclick: () => { toggleCut(c.id); showNode(n.id); } }, state.selection.includes(c.id) ? 'uncut' : 'cut') }]),
         ], d.children.slice(0, 300))) : '',
         (d.incoming.length || d.outgoing.length) ? el('div', {}, el('h4', {}, 'Connections'),
           el('ul', { class: 'plain' },
@@ -454,7 +491,7 @@ export async function graph(id, params) {
   levelSel.querySelector('select').addEventListener('change', (e) => { state.level = e.target.value; store.set('nd-graph-level', state.level); reload(); });
   groupSel.querySelector('select').addEventListener('change', (e) => { state.groupBy = e.target.value; reload(); });
   layoutSel.addEventListener('change', () => { state.layout3d = layoutSel.value; store.set('nd-graph-layout3d', state.layout3d); setDim('3d'); });
-  colorSel.querySelector('select').addEventListener('change', (e) => { state.color = e.target.value; store.set('nd-graph-color', state.color); recolor(); });
+  colorSel.querySelector('select').addEventListener('change', (e) => { state.color = e.target.value; store.set('nd-graph-color', state.color); recolor(); updateLegend(); });
   const zoomCtl = el('span', { class: 'zoom-ctl' },
     el('button', { title: 'Zoom out', onclick: () => cur()?.zoomBy(1 / 1.25) }, '−'),
     el('button', { title: 'Zoom in', onclick: () => cur()?.zoomBy(1.25) }, '+'),
@@ -463,6 +500,15 @@ export async function graph(id, params) {
   const legend = el('span', { class: 'muted small' }, 'removable: ',
     ...Object.entries(REMOVABLE).flatMap(([k, c]) => [el('span', { class: 'swatch', style: `background:${c}` }), k + ' ']),
     el('span', { class: 'swatch', style: 'background:#f28e2b' }), 'edited ', el('span', { class: 'swatch', style: 'background:#8e44ad' }), 'token path');
+  const diffLegend = el('span', { class: 'muted small' });
+  function updateLegend() {
+    legend.hidden = state.color === 'diff';
+    diffLegend.hidden = state.color !== 'diff';
+    if (state.color !== 'diff') return;
+    if (!s.diff) { diffLegend.replaceChildren('no diff for this model: run one on the ', el('a', { href: `#/diff?a=${id}` }, 'Diff page')); return; }
+    diffLegend.replaceChildren(`diff vs ${s.diff.b.name}: `, ...[0, 0.25, 0.5, 0.75, 1].map((v) => el('span', { class: 'swatch', style: `background:${heat(v)}` })),
+      ' unchanged → most changed (relative L2, scaled per level) ', el('span', { class: 'swatch', style: 'background:#dddddd' }), 'no data');
+  }
   const clearHl = el('button', { title: 'Remove the token-journey highlight', onclick: () => { s.highlight = new Set(); cur()?.setMarks(marks()); } }, 'clear path');
 
   const onEdits = (e) => { if (e.detail.model === id) cur()?.setMarks(marks()); };
@@ -472,18 +518,19 @@ export async function graph(id, params) {
 
   const node = el('section', { class: 'graph-view' },
     el('div', { class: 'row' }, el('h2', {}, 'Graph'), el('span', { class: 'segmented', role: 'radiogroup' }, dimBtns['2d'], dimBtns['3d']), layoutLbl, backendBadge,
-      levelSel, groupSel, colorSel, search, zoomCtl, flowBtn,
-      el('button', { onclick: () => { state.expand.clear(); reload(); } }, 'Collapse all'), clearHl, legend),
+      levelSel, groupSel, colorSel, search, zoomCtl, isLocal() ? '' : flowBtn,
+      el('button', { onclick: () => { state.expand.clear(); reload(); } }, 'Collapse all'), clearHl, legend, diffLegend),
     info,
     el('div', { class: 'graph-main' }, el('div', { class: 'graph-canvases' }, canvas2, canvasF), side),
-    selBox,
-    results);
+    isLocal() ? '' : selBox,
+    isLocal() ? '' : results);
   node.cleanup = () => {
     window.removeEventListener('nd-edits', onEdits);
     window.removeEventListener('nd-highlight', onHl);
     g2?.dispose(); gf?.dispose(); g2 = null; gf = null;
   };
   renderSelection();
+  updateLegend();
   loadEdits(id).catch(() => {});
   // Render after the node is attached so the canvas can measure its container.
   setTimeout(reload, 0);

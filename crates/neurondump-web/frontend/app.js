@@ -1,13 +1,16 @@
-// Hash router: #/models, #/model/<id>/<view>[?query], #/search?q=…, #/compare, #/jobs.
+// Hash router: #/models, #/model/<id>/<view>[?query], #/search?q=…, #/compare, #/diff, #/jobs.
 
-import { api, getToken } from './api.js';
+import { api, getToken, isLocal } from './api.js';
 import { el, errorBox, store } from './ui.js';
 import * as views from './views.js';
 import * as inspector from './inspector.js';
 import { edits as editsPage, mountDrawer } from './edits.js';
 import { loadEdits } from './session.js';
+import { diff as diffPage } from './diff.js';
 
-const MODEL_VIEWS = ['overview', 'vocab', 'tensors', 'layers', 'graph', 'tokens', 'journey', 'timeline', 'edits', 'template', 'stats', 'analyze', 'trace'];
+const MODEL_VIEWS = isLocal()
+  ? ['overview', 'vocab', 'tensors', 'layers', 'graph', 'template', 'stats'] // browser demo: static inspection only
+  : ['overview', 'vocab', 'tensors', 'layers', 'graph', 'tokens', 'journey', 'timeline', 'edits', 'template', 'stats', 'analyze', 'trace'];
 const PAGES = { ...views, tokens: inspector.tokens, journey: inspector.journey, timeline: inspector.timeline, edits: editsPage };
 const drawer = mountDrawer(() => currentModel);
 let current = null;
@@ -34,7 +37,7 @@ async function route() {
   const modelnav = document.getElementById('modelnav');
   const label = document.getElementById('model-label');
   if (current?.cleanup) current.cleanup();
-  if (!getToken()) {
+  if (!getToken() && !isLocal()) {
     view.replaceChildren(errorBox({ message: 'No session token. Open the URL printed by `neurondump web` (it contains ?token=…).' }));
     return;
   }
@@ -64,7 +67,7 @@ async function route() {
         search.value = params.get('q') || '';
         node = await views.search(null, params);
       } else {
-        node = parts[0] === 'compare' ? await views.compare() : parts[0] === 'jobs' ? await views.jobs() : await views.models();
+        node = parts[0] === 'compare' ? await views.compare() : parts[0] === 'diff' ? await diffPage(null, params) : parts[0] === 'jobs' ? await views.jobs() : await views.models();
       }
     }
     current = node;
@@ -128,8 +131,10 @@ async function pollJobs() {
     badge.hidden = running === 0;
   } catch { badge.hidden = true; }
 }
-if (getToken()) setInterval(pollJobs, 3000);
-pollJobs();
+if (!isLocal()) {
+  if (getToken()) setInterval(pollJobs, 3000);
+  pollJobs();
+}
 
 window.addEventListener('hashchange', route);
 route();

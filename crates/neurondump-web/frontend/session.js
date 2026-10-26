@@ -1,13 +1,14 @@
 // State shared between pages of one model during the session: the last prompt, the last
 // token journey (for the graph's token flow), nodes to highlight in the graph, and the
-// edit stack (kept in sync with the server and announced with an `nd-edits` event).
+// edit stack (kept in sync with the server and announced with an `nd-edits` event), and the
+// last diff against another model (for the graph's "color by diff").
 
 import { api } from './api.js';
 
 const state = new Map(); // model id -> { prompt, chat, journey, highlight:Set, edits }
 
 export function session(id) {
-  if (!state.has(id)) state.set(id, { prompt: 'The name of the star that Earth orbits is', chat: false, journey: null, highlight: new Set(), edits: null });
+  if (!state.has(id)) state.set(id, { prompt: 'The name of the star that Earth orbits is', chat: false, journey: null, highlight: new Set(), edits: null, diff: null });
   return state.get(id);
 }
 
@@ -17,6 +18,11 @@ export function setHighlight(id, ids, journey) {
   s.highlight = new Set(ids || []);
   if (journey) s.journey = journey;
   window.dispatchEvent(new CustomEvent('nd-highlight', { detail: { model: id } }));
+}
+
+/** Remembers a diff report (model `id` is its A side) for the graph. */
+export function setDiff(id, report) {
+  session(id).diff = report;
 }
 
 /** Replaces the cached edit view and tells every page. */

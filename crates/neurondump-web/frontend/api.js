@@ -10,11 +10,18 @@ if (params.get('token')) {
 
 export function getToken() { return token; }
 
+// In-browser demo: a local backend ({ api(path, opts) }, backed by WebAssembly) answers the
+// read-only endpoints instead of the HTTP server.
+let local = null;
+export function setLocalBackend(b) { local = b; }
+export function isLocal() { return local !== null; }
+
 export class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
 export async function api(path, opts = {}) {
+  if (local) return local.api(path, opts);
   const headers = { 'x-neurondump-token': token, ...(opts.headers || {}) };
   if (opts.body && typeof opts.body !== 'string') {
     headers['content-type'] = 'application/json';

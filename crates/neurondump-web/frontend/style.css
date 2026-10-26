@@ -156,10 +156,21 @@ button.small { padding: 0 .4rem; font-size: 12px; }
 /* Edit drawer (every model page) */
 #edit-drawer { position: fixed; top: 52px; right: 0; bottom: 0; width: min(520px, 100vw); z-index: 20; overflow: auto; padding: .75rem 1rem;
   background: var(--bg); border-left: 1px solid var(--border); box-shadow: -4px 0 12px rgba(0,0,0,.12); }
-.edit-list li { padding: 2px 0; }
+.edit-list li { display: flex; align-items: center; gap: .5rem; padding: 3px 0; border-bottom: 1px solid var(--border); }
+.edit-list li:last-child { border-bottom: 0; }
+.edit-list li > label { flex: 1; display: flex; align-items: center; gap: .4rem; min-width: 0; }
 .edit-list li.off span { color: var(--muted); text-decoration: line-through; }
-.edit-add, .edit-compare { margin: .75rem 0; padding: .5rem; border: 1px solid var(--border); border-radius: var(--radius); }
-.edit-fields { display: flex; flex-wrap: wrap; gap: .4rem .75rem; margin-top: .4rem; }
+.edit-section { margin: .75rem 0; padding: .5rem .75rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.edit-section h4 { margin: 0 0 .4rem; }
+.edit-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.edit-head .row { margin: 0; }
+.edit-groups { display: flex; flex-direction: column; gap: .3rem; }
+.edit-group { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.edit-group > .muted { width: 6.5em; }
+.edit-fields { display: flex; flex-wrap: wrap; gap: .5rem .75rem; margin-top: .6rem; }
+.edit-field { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+.edit-field.edit-check { flex-direction: row; align-items: center; color: var(--fg); }
+.edit-field.wide { flex-basis: 100%; }
 .edit-field textarea { width: 100%; min-width: 280px; }
 .edit-quick { margin-top: .4rem; }
 .side-by-side pre.gen, pre.gen { white-space: pre-wrap; background: var(--bg-alt); padding: .5rem; border-radius: var(--radius); min-height: 2.5em; }
