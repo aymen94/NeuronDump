@@ -8,11 +8,12 @@ How the code is organized. For what NeuronDump reads from a GGUF file and why, s
 | Crate | Job | Depends on |
 |---|---|---|
 | [`neurondump-gguf`](https://crates.io/crates/neurondump-gguf) | zero-copy GGUF parser (memory-mapped), dequantization, Q8_0 quantization, GGUF v3 writer | `memmap2`, `half` |
-| [`neurondump-core`](https://crates.io/crates/neurondump-core) | **all the logic**: discovery, architecture, tokenizer, templates, stats, analyze, slim, graph, impact, chat rendering, token inspector, edit overlay, bake, jobs | `neurondump-gguf`, `rayon`, `serde` |
+| [`neurondump-core`](https://crates.io/crates/neurondump-core) | **all the logic**: discovery, architecture, tokenizer, templates, stats, analyze, slim, graph, impact, chat rendering, token inspector, edit overlay, bake, diff, jobs. The default `native` feature holds everything that needs files or threads; without it the static part builds for WebAssembly | `neurondump-gguf`, `rayon`, `serde` |
 | [`neurondump-trace`](https://crates.io/crates/neurondump-trace) | the forward pass (candle, CPU): trace, simulation, sweeps, token journey, generation, interventions | `candle-core`, `neurondump-core` |
 | [`neurondump-cli`](https://crates.io/crates/neurondump-cli) | one-shot commands, the interactive REPL, terminal rendering | `neurondump-core`, `clap`, `rustyline` |
 | [`neurondump-web`](https://crates.io/crates/neurondump-web) | axum server, JSON API, embedded frontend (plain ES modules + vendored wamr3d) | `neurondump-core`, `axum`, `rust-embed` |
 | [`neurondump`](https://crates.io/crates/neurondump) | the binary: wires the front ends and registers the trace backend | features `cli`, `web`, `trace` |
+| `neurondump-wasm` (not published) | the [browser demo](https://aymen94.github.io/NeuronDump/demo/): static inspection in WebAssembly behind the same web frontend | `neurondump-core` (no `native`), `wasm-bindgen` |
 
 All six crates are published on crates.io with the same version. The library crates have API
 docs on docs.rs ([gguf](https://docs.rs/neurondump-gguf), [core](https://docs.rs/neurondump-core),
@@ -25,7 +26,7 @@ Every result is JSON with a `schema_version`.
 
 ## Core API
 
-`App` (`crates/neurondump-core/src/app.rs`) is the facade:
+`App` (`crates/neurondump-core/src/app/`) is the facade:
 
 | Area | Methods |
 |---|---|
@@ -37,11 +38,11 @@ Every result is JSON with a `schema_version`.
 | token inspector | `embedding_map(m, p)` (memory + disk cache) |
 | jobs | `run(kind, model, params, p)` (synchronous, used by the CLI), `submit(kind, model, params)` (background thread, used by the web and the REPL `&`) |
 
-Module map of `neurondump-core`:
+Module map of `neurondump-core` (file by file: [CODEMAP](CODEMAP.md)):
 
 | Module | Contents |
 |---|---|
-| `discovery` | Ollama manifests, extra scan dirs, ids, "did you mean" |
+| `discovery` | Ollama manifests, llama.cpp / Hugging Face / LM Studio / Jan folders, extra dirs, ids, "did you mean" |
 | `model` | `ModelHandle`: the mmapped GGUF plus the Ollama layers (template, system, params) |
 | `arch`, `inspect`, `stats` | architecture and tensor roles, the inspect report, weight statistics |
 | `tokenizer` | vocabulary decoding, token classes, BPE / SPM / WPM encoders |
@@ -53,12 +54,14 @@ Module map of `neurondump-core`:
 | `trace` | backend trait and every request / report type of the forward pass |
 | `tokens` | tokenize report (template tokens, embedding norms, neighbours) and the PCA embedding map |
 | `edits` | edit ops, the edit stack (undo / redo), compile to an intervention, bake, snapshots |
+| `diff` | streamed weight diff of two models (per tensor, layer, block, expert), metadata / vocab / template diff |
+| `api` | JSON of the read-only endpoints, shared by the web server and the browser demo |
 | `jobs` | job manager, progress, cancellation, results on disk |
 
 ## Job system
 
 Long work runs as a job: `inspect`, `stats`, `analyze`, `slim`, `trace`, `ablate`, `sweep`,
-`journey`, `generate`, `compare`, `bake`.
+`journey`, `generate`, `compare`, `bake`, `diff`.
 
 1. `App::submit` creates a `JobInfo` (queued), spawns a thread and calls `App::run`.
 2. `run` reports progress through the `Progress` trait (percent + step name, throttled) and checks

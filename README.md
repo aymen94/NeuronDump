@@ -166,6 +166,18 @@ neurondump slim llama3.2:1b --plan plan.json --out llama-14.gguf
 
 Details: [Graph and ablation](docs/graph-and-ablation.md).
 
+### Diff two models
+
+Base vs fine-tune, Q4 vs Q8, or original vs slimmed: tensors are matched by name and compared
+block by block, per layer, block and expert, plus metadata, vocabulary and chat template. The web
+UI colors the graph with the result.
+
+```sh
+neurondump diff huihui_ai/qwen2.5-abliterate:0.5b qwen2.5:0.5b --top 10
+```
+
+![An abliterated qwen2.5 against the original: only the feed-forward blocks changed](docs/images/model_diff2.png)
+
 ## Documentation
 
 | Page | What it covers |

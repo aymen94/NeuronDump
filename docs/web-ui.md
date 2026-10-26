@@ -32,7 +32,7 @@ Open that link. The token is new at every start, and the page doesn't work witho
 | model › **tokens** | tokenization, the templated prompt, per-token embedding info, the 3D embedding map ([below](#tokens)) |
 | model › **journey** | one token through the layers: logit lens, attention, FFN, decision breakdown ([below](#journey)) |
 | model › **timeline** | generation step by step, with probabilities, entropy, alternatives ([below](#timeline)) |
-| model › **edits** | the full edit page: stack, add, snapshots, compare, bake ([below](#edits)) |
+| model › **edits** | the full edit page: stack, new edit, snapshots, compare, bake ([below](#edits)) |
 | model › **template** | the chat template as a collapsible tree |
 | model › **stats** | statistics and histogram for one tensor, or the whole model as a job |
 | model › **analyze** | run an analysis, tick the candidates you want, press **Slim** |
@@ -69,6 +69,23 @@ journey, timeline, compare (and trace, simulate, sweep) need a build with `--fea
   journey's **Show path in the graph** adds.
 
 ![Section level, grouped by layer](images/model_graph2.png)
+
+## Diff
+
+Pick **A** and **B** and press **Diff**: matching tensors are compared block by block (any pair of
+quantization types), then summed up per layer and per block, with the most changed tensors, the
+metadata, the vocabulary and the chat template. **Color the graph of A by this diff** opens A's
+graph with **color by = diff**.
+
+![Diff page: huihui_ai/qwen2.5-abliterate:0.5b against qwen2.5:0.5b — 227 of 290 tensors identical,
+the change sits in the feed-forward blocks](images/diff.png)
+
+![The abliterated model's graph colored by the diff (3D dataflow, layer level)](images/model_diff.png)
+
+At block level the picture is clearer: the feed-forward blocks (right) are red, attention (left)
+is almost untouched, and layer 0 did not change at all.
+
+![Block level: feed-forward vs attention per layer](images/model_diff2.png)
 
 ## Tokens
 
@@ -141,9 +158,11 @@ The edit panel (drawer or full page):
 
 - **Stack:** every edit with an on/off checkbox and ×; **↶ undo**, **↷ redo**, **restore all** (back
   to the original model, undoable). Changed node ids and notes are listed.
-- **Add:** scale / zero a node, skip a layer, ablation cut, ban / boost a token, embedding row edit,
-  steering vector (two prompts + strength), activation patching (layer, optional head, source prompt),
-  sampling, forced token, system prompt, chat template. Tokens can be typed as text or `#id`.
+- **New edit:** pick the edit type from four button groups — **Nodes** (scale, zero, skip a layer,
+  ablation cut), **Tokens** (ban, boost, embedding row, forced token), **Activations** (steering vector,
+  activation patching) and **Generation** (sampling, system prompt, chat template) — fill in the
+  fields that appear and press **Apply**. Tokens can be typed as text or `#id`. The edit buttons in the
+  graph's side panel open this form already filled in.
 - **Snapshots:** save the stack under a name, load it back; **export edits.json** / **import**.
 - **Before / after:** a prompt, generated tokens and an optional corpus; **Compare** runs baseline vs
   edited: generated text side by side, top-k, KL, top-1 change, perplexity on the corpus, the logit
@@ -151,11 +170,14 @@ The edit panel (drawer or full page):
 - **Bake:** writes the edits into a new GGUF in `~/neurondump/bake/` with a Modelfile, and prints the
   `ollama create` command.
 
+![Live edits page: two edits in the stack (scale layer.12 ×0.3, zero one attention head), the
+New edit buttons, snapshots, before / after and a finished bake](images/model_edits.png)
+
 See [Interventions](interventions.md) for what every edit does.
 
 ## Jobs
 
-Long work (stats, analyze, slim, trace, ablate, sweep, journey, generate, compare, bake) runs as a
+Long work (stats, analyze, slim, trace, ablate, sweep, journey, generate, compare, bake, diff) runs as a
 **job**, so the page stays usable. A number next to **Jobs** in the header counts the running ones.
 Each job shows live progress and can be cancelled; results of deterministic jobs are cached
 (`(cached)` in the progress line).

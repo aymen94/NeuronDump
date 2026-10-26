@@ -146,7 +146,7 @@ curl -s -H "$H" -X DELETE $U/models/$M/edits
 | GET | `/api/jobs/{id}/result` | the result JSON (409 while running) |
 
 Kinds: `inspect`, `stats`, `analyze`, `slim`, `trace`, `ablate`, `sweep`, `journey`, `generate`,
-`compare`, `bake`. The API never accepts server file paths: corpus files are stripped (send texts),
+`compare`, `bake`, `diff` (`model` is A; `params`: `{ "other": "<id of B>", "top": N, "metadata_only": false }`). The API never accepts server file paths: corpus files are stripped (send texts),
 `slim` / `bake` outputs must be plain file names.
 
 `journey`, `generate` and `compare` use the model's **current edit stack** unless `params.edits` is

@@ -69,6 +69,7 @@ More detail (core API, job system, graph, forward pass, edit overlay): [Architec
 | `neurondump-cli` | command line and interactive prompt |
 | `neurondump-web` | web server and web page |
 | `neurondump` | the program that ties them together |
+| `neurondump-wasm` | the browser demo (inspection only, not published) |
 
 The CLI and the web interface contain no analysis code. Both call the same core library,
 so they always give the same answers. Every result is JSON with a `schema_version`, and the

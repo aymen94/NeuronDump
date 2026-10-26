@@ -28,6 +28,7 @@ nav:
       - Building: building.md
   - Research:
       - What's inside real models: models.md
+      - What fine-tunes change: diff-research.md
 
 theme:
   name: material
