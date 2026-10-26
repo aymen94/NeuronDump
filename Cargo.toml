@@ -45,4 +45,4 @@ tracing = "0.1"
 comfy-table = { version = "7", default-features = false }
 
 [profile.release]
-debug = 1
+strip = "debuginfo"
