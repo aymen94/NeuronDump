@@ -39,7 +39,9 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - id: wasm-bindgen
-        run: echo "version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"//p')" >> "$GITHUB_OUTPUT"
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | awk -F'"' '/^version/ {print $2}')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
