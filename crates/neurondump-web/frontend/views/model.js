@@ -13,14 +13,14 @@ export async function models() {
   const filter = el('input', { type: 'search', placeholder: 'filter by name, architecture or quantization', size: 40 });
   const total = data.models.reduce((a, m) => a + (m.size || 0), 0);
   const cols = [
-    { label: 'name', get: (m) => el('a', { href: `#/model/${m.id}/overview` }, highlight(m.name, filter.value)), sort: (m) => m.name },
-    { label: 'source', get: (m) => m.source },
-    { label: 'arch', get: (m) => (m.architecture || (m.error ? 'error' : '-')) + (m.has_projector ? ' +vision' : '') },
-    { label: 'params', get: (m) => count(m.params), num: true, sort: (m) => m.params || 0 },
-    { label: 'quant', get: (m) => m.quantization || '-' },
-    { label: 'ctx', get: (m) => count(m.context_length), num: true, sort: (m) => m.context_length || 0 },
-    { label: 'size', get: (m) => bytes(m.size), num: true, sort: (m) => m.size || 0 },
-    { label: 'id', get: (m) => copyable(m.id), sort: (m) => m.id },
+    { label: 'name', tip: 'Unique model identifier in Ollama or local storage.', get: (m) => el('a', { href: `#/model/${m.id}/overview` }, highlight(m.name, filter.value)), sort: (m) => m.name },
+    { label: 'source', tip: 'Origin of model files (Ollama Docker volume, local disk, Hugging Face cache, etc.).', get: (m) => m.source },
+    { label: 'arch', tip: 'Base neural network architecture. "+vision" indicates multimodal image input support.', get: (m) => (m.architecture || (m.error ? 'error' : '-')) + (m.has_projector ? ' +vision' : '') },
+    { label: 'params', tip: 'Total parameter count (brain size). ~1-4B is fast and lightweight, 7-14B is balanced, 30B+ requires high-end hardware.', get: (m) => count(m.params), num: true, sort: (m) => m.params || 0 },
+    { label: 'quant', tip: 'Weight quantization format (e.g. Q4_K_M). Compresses 16-bit floats to ~4 bits, saving ~75% VRAM with minimal quality loss.', get: (m) => m.quantization || '-' },
+    { label: 'ctx', tip: 'Maximum context window size (tokens). Determines how much conversational history the model can process.', get: (m) => count(m.context_length), num: true, sort: (m) => m.context_length || 0 },
+    { label: 'size', tip: 'Actual GGUF file size on disk.', get: (m) => bytes(m.size), num: true, sort: (m) => m.size || 0 },
+    { label: 'id', tip: 'Unique short identifier hash for this model file. Click to copy.', get: (m) => copyable(m.id), sort: (m) => m.id },
   ];
   const box = el('div', {});
   const render = () => {
@@ -53,10 +53,14 @@ export async function overview(id, params) {
   return el('section', {},
     el('h2', {}, r.model.name, ' ', copyable(r.model.id)),
     cards([
-      ['architecture', `${a.name} · ${a.kind}`], ['parameters', count(a.total_params)], ['quantization', r.model.quantization || '?'],
-      ['file size', bytes(r.file.file_size)], ['layers', String(Object.values(a.layer_kinds || {}).reduce((n, l) => n + l.length, 0))],
-      ['vocabulary', r.tokenizer ? count(r.tokenizer.size) : '-'], ['context', count(hp.context_length)],
-      ['heads (q/kv)', hp.head_count ? `${hp.head_count} / ${hp.head_count_kv ?? hp.head_count}` : '-'],
+      ['architecture', `${a.name} · ${a.kind}`, 'Base model architecture family and decoder/encoder type.'],
+      ['parameters', count(a.total_params), 'Total count of trainable neural network weights.'],
+      ['quantization', r.model.quantization || '?', 'Weight compression format (e.g. Q4_K_M for 4-bit medium).'],
+      ['file size', bytes(r.file.file_size), 'Actual storage size of the model GGUF file.'],
+      ['layers', String(Object.values(a.layer_kinds || {}).reduce((n, l) => n + l.length, 0)), 'Number of transformer layer blocks stacked inside the model.'],
+      ['vocabulary', r.tokenizer ? count(r.tokenizer.size) : '-', 'Total number of tokens in the model vocabulary.'],
+      ['context', count(hp.context_length), 'Maximum context window size in tokens.'],
+      ['heads (q/kv)', hp.head_count ? `${hp.head_count} / ${hp.head_count_kv ?? hp.head_count}` : '-', 'Attention heads: Query heads vs Key-Value heads (GQA reduces KV cache memory).'],
     ]),
     el('p', { class: 'muted' }, `GGUF v${r.file.version} · ${r.file.n_tensors} tensors · ${r.file.n_kv} metadata keys · `, copyable(r.model.path)),
     exportLinks,
