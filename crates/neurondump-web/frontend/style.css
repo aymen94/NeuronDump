@@ -69,7 +69,7 @@ button:disabled { opacity: .5; cursor: default; }
 .card .v { font-size: 1.15rem; font-weight: 600; }
 
 /* Tables */
-.tablewrap { overflow-x: auto; }
+.tablewrap { overflow-x: auto; padding-bottom: 60px; }
 table { border-collapse: collapse; margin: .5rem 0; width: auto; }
 th, td { border-bottom: 1px solid var(--border); padding: 4px 10px; text-align: left; vertical-align: top; }
 th { background: var(--bg-alt); font-weight: 600; position: sticky; top: 0; white-space: nowrap; }
@@ -79,6 +79,19 @@ th .arrow { color: var(--muted); font-size: 11px; }
 tbody tr:hover { background: var(--bg-hover); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 code.copy { cursor: copy; border-bottom: 1px dotted var(--muted); }
+
+/* Info Tooltips */
+.info-tip { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%;
+  font-size: 10px; font-weight: 700; line-height: 1; color: var(--muted); border: 1px solid var(--border); background: var(--bg-alt);
+  cursor: help; margin-left: 5px; vertical-align: middle; position: relative; user-select: none; }
+.info-tip:hover, .info-tip:focus { color: var(--accent); border-color: var(--accent); background: var(--bg-hover); }
+.info-tip .tip-content { visibility: hidden; opacity: 0; position: absolute; top: 140%; bottom: auto; left: 50%; transform: translateX(-50%);
+  background: var(--bg-alt); color: var(--fg); border: 1px solid var(--border); padding: 8px 12px; border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0,0,0,.35); font-size: 11px; font-weight: 400; line-height: 1.45; white-space: normal;
+  width: max-content; max-width: 270px; text-align: left; z-index: 9999; pointer-events: none; transition: opacity .15s ease, visibility .15s ease; }
+th:first-child .info-tip .tip-content { left: 0; transform: none; }
+th:last-child .info-tip .tip-content { left: auto; right: 0; transform: none; }
+.info-tip:hover .tip-content, .info-tip:focus .tip-content { visibility: visible; opacity: 1; }
 
 /* Search */
 .hits h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; }

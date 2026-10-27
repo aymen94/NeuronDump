@@ -62,23 +62,43 @@ export function highlight(text, needle) {
   return out;
 }
 
-/** Row of summary cards: [[label, value], ...] */
+/** Inline info tooltip (?) with popup explanation. */
+export function infoTip(text) {
+  return el('span', { class: 'info-tip', tabindex: '0', title: text }, '?',
+    el('span', { class: 'tip-content' }, text));
+}
+
+/** Row of summary cards: [[label, value, tip?], ...] */
 export function cards(items) {
   return el('div', { class: 'cards' }, items.filter(([, v]) => v !== undefined && v !== null && v !== '-')
-    .map(([k, v]) => el('div', { class: 'card' }, el('div', { class: 'k' }, k), el('div', { class: 'v' }, v))));
+    .map(([k, v, tip]) => el('div', { class: 'card' },
+      el('div', { class: 'k' }, k, tip ? infoTip(tip) : ''),
+      el('div', { class: 'v' }, v))));
 }
 
 function cellText(v) { return v instanceof Node ? v.textContent : String(v ?? ''); }
 
 /**
- * columns: [{label, get(row) -> string|Node, num?, sort?(row) -> number|string}]
+ * columns: [{label, get(row) -> string|Node, tip?, num?, sort?(row) -> number|string}]
  * Click a header to sort (client-side) unless opts.sortable === false.
  */
 export function table(columns, rows, opts = {}) {
   const sortable = opts.sortable !== false;
   let order = { i: -1, dir: 1 };
   const tbody = el('tbody', {});
-  const ths = columns.map((c, i) => el('th', { class: sortable ? 'sortable' : '', onclick: sortable ? () => sortBy(i) : null }, c.label, el('span', { class: 'arrow' })));
+  const ths = columns.map((c, i) => {
+    const headerChildren = [c.label];
+    if (c.tip) {
+      headerChildren.push(infoTip(c.tip));
+    }
+    headerChildren.push(el('span', { class: 'arrow' }));
+    return el('th', {
+      class: sortable ? 'sortable' : '',
+      onclick: sortable ? (e) => {
+        if (!e.target.closest('.info-tip')) sortBy(i);
+      } : null,
+    }, ...headerChildren);
+  });
   const render = (list) => tbody.replaceChildren(...list.map((r) => el('tr', {}, columns.map((c) => {
     const v = c.get(r);
     return el('td', { class: c.num ? 'num' : '' }, v instanceof Node ? v : String(v ?? ''));
