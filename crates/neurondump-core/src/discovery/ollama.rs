@@ -87,6 +87,106 @@ pub fn normalize_name(q: &str) -> String {
     format!("{registry}/{namespace}/{model}:{tag}").to_lowercase()
 }
 
+fn inspect_and_push_volume(path: &Path, out: &mut Vec<PathBuf>) -> bool {
+    let m1 = path.join("_data").join("models");
+    let m2 = path.join("_data");
+    if m1.join("manifests").is_dir() || m1.join("manifests-v2").is_dir() {
+        out.push(m1);
+        true
+    } else if m2.join("manifests").is_dir() || m2.join("manifests-v2").is_dir() {
+        out.push(m2);
+        true
+    } else {
+        false
+    }
+}
+
+fn add_docker_ollama_dirs(out: &mut Vec<PathBuf>) {
+    let custom_vol = std::env::var("OLLAMA_DOCKER_VOLUME").ok();
+
+    #[cfg(target_os = "windows")]
+    {
+        let docker_volume_roots = [
+            r"\\wsl.localhost\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes",
+            r"\\wsl$\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes",
+            r"\\wsl.localhost\docker-desktop-data\mnt\docker-desktop-disk\data\docker\volumes",
+            r"\\wsl$\docker-desktop-data\mnt\docker-desktop-disk\data\docker\volumes",
+            r"\\wsl.localhost\docker-desktop-data\version-pack-data\community\docker\volumes",
+            r"\\wsl$\docker-desktop-data\version-pack-data\community\docker\volumes",
+        ];
+
+        for root_str in docker_volume_roots {
+            let root = Path::new(root_str);
+            if !root.is_dir() {
+                continue;
+            }
+            if let Some(ref vol) = custom_vol {
+                out.push(root.join(vol).join("_data").join("models"));
+                out.push(root.join(vol).join("_data"));
+            }
+
+            let mut matched = false;
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        // Check if this volume actually contains Ollama models, regardless of its name
+                        if inspect_and_push_volume(&path, out) {
+                            matched = true;
+                        } else {
+                            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            if name.eq_ignore_ascii_case("ollama") || name.to_lowercase().contains("ollama") {
+                                out.push(path.join("_data").join("models"));
+                                out.push(path.join("_data"));
+                                matched = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if !matched {
+                out.push(root.join("ollama").join("_data").join("models"));
+                out.push(root.join("ollama").join("_data"));
+            }
+            // Once we find a working Docker volume root, stop checking aliases (e.g. \\wsl$ vs \\wsl.localhost)
+            break;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let root = Path::new("/var/lib/docker/volumes");
+        if root.is_dir() {
+            if let Some(ref vol) = custom_vol {
+                out.push(root.join(vol).join("_data").join("models"));
+                out.push(root.join(vol).join("_data"));
+            }
+            let mut matched = false;
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if inspect_and_push_volume(&path, out) {
+                            matched = true;
+                        } else {
+                            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            if name.eq_ignore_ascii_case("ollama") || name.to_lowercase().contains("ollama") {
+                                out.push(path.join("_data").join("models"));
+                                out.push(path.join("_data"));
+                                matched = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if !matched {
+                out.push(root.join("ollama").join("_data").join("models"));
+                out.push(root.join("ollama").join("_data"));
+            }
+        }
+    }
+}
+
 /// All Ollama model directories that exist on this machine.
 pub fn ollama_model_dirs() -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -102,6 +202,8 @@ pub fn ollama_model_dirs() -> Vec<PathBuf> {
         out.push(PathBuf::from("/usr/share/ollama/.ollama/models"));
         out.push(PathBuf::from("/var/lib/ollama/.ollama/models"));
     }
+    add_docker_ollama_dirs(&mut out);
+
     let mut seen = HashSet::new();
     out.into_iter()
         .filter(|p| p.join("manifests").is_dir() || p.join("manifests-v2").is_dir())
