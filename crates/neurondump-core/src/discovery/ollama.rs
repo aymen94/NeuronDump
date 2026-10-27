@@ -330,3 +330,24 @@ pub(super) fn scan(models_dir: &Path, entries: &mut Vec<ModelEntry>, warnings: &
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inspect_and_push_volume() {
+        let temp_dir = std::env::temp_dir().join(format!("nd_test_vol_{}", std::process::id()));
+        let models_dir = temp_dir.join("_data").join("models");
+        let manifests_dir = models_dir.join("manifests");
+        std::fs::create_dir_all(&manifests_dir).unwrap();
+
+        let mut out = Vec::new();
+        let matched = inspect_and_push_volume(&temp_dir, &mut out);
+        assert!(matched);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], models_dir);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}
