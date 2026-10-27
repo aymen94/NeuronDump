@@ -117,6 +117,19 @@ stats, template, `diff --metadata-only`); trace does not support `gemma4` yet. N
   outputs drift from llama.cpp from the first token. Static analysis is unaffected; a 4k Phi-3 has no
   such factors.
 
+## Qwen3.8 27B (static check)
+
+Checked the installed Ollama model with `neurondump inspect`, `layers`, `tokens`, and `template`.
+Static analysis succeeds; the tokenizer returns 8 tokens for `naïve café — 🚀`. This is not a
+tokenizer comparison against llama.cpp.
+
+- The GGUF is `qwen35`, a 27.32B-parameter hybrid in Q4_K_M (15.66 GiB), with a 262,144-token
+  context and a 248,320-token vocabulary.
+- It has 64 main layers in a repeating three linear-attention / one full-attention pattern, plus
+  layer 64 (`nextn`) for next-token prediction. It also includes an 888 MiB CLIP projector.
+- `trace` reports `qwen35` as unsupported, so this check covers static analysis only; no forward
+  pass or generated-token comparison was made.
+
 ## Reproduce
 
 ```sh
@@ -127,4 +140,8 @@ curl http://127.0.0.1:11434/api/generate -d '{"model":"gemma2:2b","prompt":"The 
 neurondump trace gemma:7b --prompt "The name of the star that Earth orbits is"
 neurondump layers gemma4:e2b
 neurondump graph gemma4:e4b --level layer
+neurondump inspect qwen3.8:27b --dir ~/.ollama/models
+neurondump layers qwen3.8:27b --dir ~/.ollama/models
+neurondump tokens qwen3.8:27b "naïve café — 🚀" --dir ~/.ollama/models
+neurondump trace qwen3.8:27b --prompt "The name of the star that Earth orbits is" --dir ~/.ollama/models
 ```

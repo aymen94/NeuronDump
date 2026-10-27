@@ -105,6 +105,10 @@ neurondump slim llama3.2:1b --plan plan.json --only vocab --out small.gguf
 neurondump web --open
 ```
 
+## Video demo
+
+<video src="video/neurondump_demo.mp4" controls width="100%"></video>
+
 ## Example
 
 ```text

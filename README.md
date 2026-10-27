@@ -23,6 +23,10 @@ ban…) with undo and a before / after comparison, then bake the edits into a ne
 **Try it in your browser:** the [browser demo](https://aymen94.github.io/NeuronDump/demo/) inspects a `.gguf` file you
 drop on the page, 100% locally (nothing is uploaded). Inspection only; the rest needs the app.
 
+## Video demo
+
+<video src="https://raw.githubusercontent.com/aymen94/NeuronDump/main/docs/video/neurondump_demo.mp4" controls width="100%"></video>
+
 ## Install
 
 **Download:** ready-made Windows, Linux and macOS builds are on the
