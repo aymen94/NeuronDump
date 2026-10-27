@@ -187,8 +187,11 @@ PowerShell notes:
 
 #### Where are my models?
 
-NeuronDump finds Ollama models in `%USERPROFILE%\.ollama\models` automatically. If you moved
-them, set `OLLAMA_MODELS` the same way you did for Ollama, or pass the folder:
+NeuronDump finds Ollama models in `%USERPROFILE%\.ollama\models` automatically.
+
+If Ollama runs inside **Docker** (`ollama/ollama`), NeuronDump automatically detects models stored in Docker Desktop (WSL2 backend) volumes (such as `ollama:/root/.ollama`). If your Docker volume has a custom name, you can set `$env:OLLAMA_DOCKER_VOLUME = "my_volume"`.
+
+If you moved your models or mounted them to a custom folder, set `OLLAMA_MODELS` the same way you did for Ollama, or pass the folder:
 
 ```powershell
 neurondump --dir D:\ollama\models list

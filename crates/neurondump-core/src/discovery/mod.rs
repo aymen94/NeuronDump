@@ -121,11 +121,16 @@ pub struct Library {
 pub(crate) fn canonical(p: &Path) -> PathBuf {
     let c = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     // Strip the Windows verbatim prefix so paths stay readable.
-    let s = c.to_string_lossy();
-    match s.strip_prefix(r"\\?\") {
-        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
-        _ => c,
+    let mut s = c.to_string_lossy().to_string();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        s = format!(r"\\{rest}");
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        s = rest.to_string();
     }
+    if s.starts_with(r"\\wsl$\") {
+        s = s.replacen(r"\\wsl$\", r"\\wsl.localhost\", 1);
+    }
+    PathBuf::from(s)
 }
 
 /// Quantization label: llama.cpp file type if declared, else the dominant tensor type.
