@@ -20,6 +20,8 @@ Progress bars go to stderr, so `--json` output can be piped safely.
 ### `list`
 All local models with source, architecture, parameter count, quantization, context and size.
 
+![CLI model list](images/cli_list.png)
+
 ### `inspect <model>`
 Full summary of one model.
 
