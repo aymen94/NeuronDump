@@ -25,7 +25,7 @@ drop on the page, 100% locally (nothing is uploaded). Inspection only; the rest 
 
 ## Video demo
 
-<video src="https://raw.githubusercontent.com/aymen94/NeuronDump/main/docs/video/neurondump_demo.mp4" controls width="100%"></video>
+[▶ Watch the NeuronDump demo (MP4)](https://github.com/aymen94/NeuronDump/blob/main/docs/video/neurondump_demo.mp4)
 
 ## Install
 
