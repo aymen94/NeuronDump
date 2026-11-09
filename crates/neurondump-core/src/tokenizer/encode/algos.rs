@@ -4,9 +4,21 @@ use super::*;
 
 impl<'a> Encoder<'a> {
     pub(super) fn bpe(&self, text: &str, ids: &mut Vec<u32>, mut used: Option<&mut HashSet<u32>>) {
+        let spm_style = self.vocab.model == TokenizerModel::BpeSpm;
         let enc = byte_encoder();
         for word in self.pre_tokenize(text) {
-            let mapped: String = word.bytes().map(|b| enc[&b]).collect();
+            // gemma4: a run of newlines is one token when the vocab has it (llama.cpp #21343).
+            if spm_style && !word.is_empty() && word.chars().all(|c| c == '\n') {
+                if let Some(&id) = self.vocab.by_raw.get(word) {
+                    ids.push(id);
+                    continue;
+                }
+            }
+            let mapped: String = if spm_style {
+                word.replace(' ', "\u{2581}")
+            } else {
+                word.bytes().map(|b| enc[&b]).collect()
+            };
             if self.ignore_merges {
                 if let Some(&id) = self.vocab.by_raw.get(mapped.as_str()) {
                     ids.push(id);

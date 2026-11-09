@@ -37,6 +37,7 @@ impl Vocab {
         let model_name = g.get_str("tokenizer.ggml.model").unwrap_or("none").to_string();
         let model = match model_name.as_str() {
             "gpt2" => TokenizerModel::Bpe,
+            "gemma4" => TokenizerModel::BpeSpm,
             "llama" => TokenizerModel::Spm,
             "bert" => TokenizerModel::Wpm,
             _ => TokenizerModel::Other,

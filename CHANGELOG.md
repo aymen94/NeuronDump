@@ -2,6 +2,13 @@
 
 Features by development phase.
 
+## Unreleased
+
+- **Gemma 4 tokenization:** `tokenizer.ggml.model = gemma4` is now encoded with llama.cpp's
+  SPM-style BPE rules (spaces escaped to `▁`, merges over raw UTF-8, newline-only pre-split), so
+  `tokens`, the token inspector and the embedding map work on Gemma 4 files. Ids verified against
+  `llama-server /tokenize` (20 texts, including newline runs, tabs, CJK, emoji and combining marks).
+
 ## 0.1.4
 
 - **macOS builds:** release archives for `aarch64-apple-darwin` and `x86_64-apple-darwin`.

@@ -15,6 +15,9 @@ mod algos;
 const GPT2_RE: &str = r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+";
 const LLAMA3_RE: &str =
     r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
+// gemma4 runs its merges over the whole text (spaces already escaped to U+2581); only
+// newlines split, because merge lookups assert no newline inside a token.
+const GEMMA4_RE: &str = r"[^\n]+|[\n]+";
 const QWEN2_RE: &str =
     r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+";
 
@@ -75,6 +78,7 @@ impl<'a> Encoder<'a> {
                 };
                 (Some(Regex::new(pat)?), ignore)
             }
+            TokenizerModel::BpeSpm => (Some(Regex::new(GEMMA4_RE)?), false),
             TokenizerModel::Spm | TokenizerModel::Wpm => (None, false),
             TokenizerModel::Other => bail!("tokenization for tokenizer model {:?} is not implemented", vocab.model_name),
         };
@@ -112,9 +116,11 @@ impl<'a> Encoder<'a> {
         let default_bos = match self.vocab.model {
             TokenizerModel::Spm | TokenizerModel::Wpm => true,
             TokenizerModel::Bpe => self.ignore_merges || pre.starts_with("llama") || pre == "falcon3",
-            TokenizerModel::Other => false,
+            TokenizerModel::BpeSpm | TokenizerModel::Other => false,
         };
-        let add_bos = add_special && self.vocab.summary.add_bos.unwrap_or(default_bos);
+        // gemma4 always starts with BOS, even if the metadata says otherwise (llama.cpp #21500).
+        let add_bos = add_special
+            && (self.vocab.model == TokenizerModel::BpeSpm || self.vocab.summary.add_bos.unwrap_or(default_bos));
         let add_eos = add_special && self.vocab.summary.add_eos.unwrap_or(self.vocab.model == TokenizerModel::Wpm);
         if add_bos {
             if let Some(b) = special("bos").or_else(|| special("cls")) {
@@ -144,7 +150,7 @@ impl<'a> Encoder<'a> {
                 continue;
             }
             match self.vocab.model {
-                TokenizerModel::Bpe => self.bpe(seg, &mut ids, used.as_deref_mut()),
+                TokenizerModel::Bpe | TokenizerModel::BpeSpm => self.bpe(seg, &mut ids, used.as_deref_mut()),
                 TokenizerModel::Spm => self.spm(seg, first, &mut ids, used.as_deref_mut()),
                 TokenizerModel::Wpm => self.wpm(seg, &mut ids),
                 TokenizerModel::Other => {}
