@@ -17,7 +17,7 @@ texts (English, extra spaces, accents and emoji, Python code, numbers, Japanese 
 | BPE llama3 | llama3.2:1b | 8 / 8 |
 | BPE qwen2 / qwen3 | qwen2.5:0.5b, deepseek-r1, qwen3-coder (MoE), qwen3.5 0.8B (hybrid) | 8 / 8 each |
 | WPM (BERT) | nomic-embed-text | 6 / 8: accented words become `[UNK]` (llama.cpp strips the accents first), Japanese kana with voiced marks differ |
-| gemma4 | gemma4:e2b, gemma4:e4b | not implemented: `tokens` stops with an error |
+| gemma4 (SPM-style BPE) | gemma4:e2b, gemma4:e4b, Gemma 4 12B | identical |
 
 (On Windows, feed `llama-tokenize` the text with `-p`, not `--stdin`: stdin turns `\r\n` into `\n`.)
 
@@ -41,7 +41,8 @@ approximate. gemma3 and bert were not run (no model installed).
 ## Gemma 4 (e2b, e4b)
 
 `gemma4:latest` is the same file as `gemma4:e4b`. Static analysis works (inspect, layers, graph,
-stats, template, `diff --metadata-only`); trace does not support `gemma4` yet. Not tried: `slim`.
+stats, template, `tokens`, `diff --metadata-only`); trace does not support `gemma4` yet. Not tried:
+`slim`.
 
 | | gemma4:e2b | gemma4:e4b |
 |---|---|---|
@@ -72,7 +73,7 @@ stats, template, `diff --metadata-only`); trace does not support `gemma4` yet. N
   `{{ .Prompt }}`; Ollama formats Gemma 4 chats in its own code. The GGUF's Jinja template is large
   (127 decisions: tools, `<|channel>` and audio markers).
 - **What NeuronDump does not know yet:** four tensor roles (`inp_gate`, `layer_output_scale`,
-  `post_norm`, `proj`) are shown as unknown, and the `gemma4` tokenizer is not implemented.
+  `post_norm`, `proj`) are shown as unknown.
 
 ## Gemma 2 2B
 

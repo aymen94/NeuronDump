@@ -73,8 +73,10 @@ qwen3moe and qwen35 models). Other BPE pre-tokenizers fall back to the llama3 ru
 - **WPM** (BERT, nomic-bert) does not normalize like llama.cpp: accented words become `[UNK]`
   (llama.cpp strips the accents first) and Japanese kana with voiced marks differ; plain English is
   exact.
-- **`gemma4`** tokenization is not implemented (`tokens` stops with an error; vocabulary and template
-  views work). UGM / RWKV are not implemented either.
+- **`gemma4`** tokenization follows llama.cpp's `LLAMA_VOCAB_PRE_TYPE_GEMMA4` rules (SPM-style BPE:
+  spaces escaped to `▁`, no GPT-2 byte encoding, newline-only pre-split) and is verified against
+  `llama-server /tokenize` on a Gemma 4 12B (20 texts: newline runs, tabs, CJK, emoji, combining
+  marks, `add_special` both ways). UGM / RWKV are not implemented.
 
 ## Web and 3D
 

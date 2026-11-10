@@ -58,7 +58,7 @@ pub fn decode_raw(model: TokenizerModel, raw: &str) -> String {
                 Err(e) => e.as_bytes().iter().map(|b| if b.is_ascii() { (*b as char).to_string() } else { format!("<0x{b:02X}>") }).collect(),
             }
         }
-        TokenizerModel::Spm | TokenizerModel::Wpm | TokenizerModel::Other => {
+        TokenizerModel::Spm | TokenizerModel::BpeSpm | TokenizerModel::Wpm | TokenizerModel::Other => {
             if let Some(b) = parse_byte_token(raw) {
                 if b.is_ascii() {
                     return (b as char).to_string();

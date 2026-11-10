@@ -152,7 +152,8 @@ Details: [Interventions](docs/interventions.md), [Web interface](docs/web-ui.md)
 
 - **Static analysis, graph, impact, slim, bake:** any GGUF architecture (layer kinds are read
   from the tensors: attention, linear attention / SSM, MoE, dense). **Tokenization** matches
-  llama.cpp for BPE (llama3, qwen2, qwen3) and SPM (gemma, phi3); not yet for `gemma4`.
+  llama.cpp for BPE (llama3, qwen2, qwen3), SPM (gemma, phi3) and `gemma4` (SPM-style BPE:
+  spaces escaped to `▁`, merges over raw UTF-8).
 - **Runtime** (`--features trace`: trace, journey, timeline, simulation, sweeps, live edits): `llama`,
   `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `bert`, `nomic-bert`, checked against
   llama.cpp (gemma2 and Phi-3 128k only approximate). No MoE or hybrid (Qwen 3.5, Gemma 4) forward

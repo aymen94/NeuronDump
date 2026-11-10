@@ -132,6 +132,8 @@ pub struct VocabSummary {
 pub enum TokenizerModel {
     /// Byte-level BPE (`gpt2`).
     Bpe,
+    /// SPM-style BPE (`gemma4`): raw UTF-8, spaces escaped to U+2581 before the merges.
+    BpeSpm,
     /// SentencePiece (`llama`).
     Spm,
     /// WordPiece (`bert`).
