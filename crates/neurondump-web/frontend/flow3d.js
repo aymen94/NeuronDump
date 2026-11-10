@@ -11,11 +11,11 @@ import { SPHERE_KINDS, layoutFlow } from './flow3d-layout.js';
 
 export { layoutFlow };
 
-// --- renderer -----------------------------------------------------------------------------
+//  renderer
 
 export async function createFlow3D(container, opts = {}) {
   const { T, OrbitControls } = await loadWamr();
-  const { renderer, backend } = await createRenderer(T);
+  const { renderer, backend } = await createRenderer(T, opts.backend);
 
   const root = document.createElement('div');
   root.className = 'graph3d';
@@ -254,7 +254,7 @@ export async function createFlow3D(container, opts = {}) {
     return flyTo(camera, controls, c, c.clone().add(dir.multiplyScalar(dist)), ids?.length ? 600 : 1, () => { dirty = true; });
   }
 
-  // --- labels ---------------------------------------------------------------------------
+  // labels
   const v3 = new T.Vector3();
   function updateLabels() {
     const w = root.clientWidth; const h = root.clientHeight;
@@ -279,7 +279,7 @@ export async function createFlow3D(container, opts = {}) {
     }
   }
 
-  // --- picking --------------------------------------------------------------------------
+  // picking
   const ray = new T.Raycaster();
   const ndc = new T.Vector2();
   function pick(ev) {
@@ -343,7 +343,6 @@ export async function createFlow3D(container, opts = {}) {
   cv.addEventListener('pointerleave', onLeave);
   controls.addEventListener('change', () => { dirty = true; });
 
-  // --- token flow -------------------------------------------------------------------------
   // Particles run up the spine; each layer glows with its activation strength, pulsing as
   // the particles pass it.
   function startFlow(values, label) {

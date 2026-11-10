@@ -27,7 +27,6 @@ export async function jobWithProgress(container, kind, model, params, onJob) {
   return api(`/jobs/${j.id}/result`);
 }
 
-// --- Models -----------------------------------------------------------------------
 
 export * from './views/model.js';
 export * from './views/analysis.js';

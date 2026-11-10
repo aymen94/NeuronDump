@@ -10,7 +10,6 @@ export function installShadows( ctx ) {
 
 	const { BONES_PER_ROW, DRAW_FIELDS, MAX_SHADOWS, bindGeometry, bindInstances, bindMaps, bindRange, distinct, draw, floatTargets, frameBuffer, gl, instances, materialBuffer, newTexture, program, ranges, setTextures, shadowObjectBuffer, unbindArrays, upload, warn } = ctx;
 
-	// ---------------------------------------------------------------- bones
 
 	ctx.boneTexture = null;
 	let boneRows = 0;
@@ -42,7 +41,6 @@ export function installShadows( ctx ) {
 
 	}
 
-	// ---------------------------------------------------------------- shadows
 
 	let shadowWidth = 0, shadowHeight = 0, shadowLayers = 0;
 	ctx.shadowTexture = null;

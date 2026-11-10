@@ -9,8 +9,6 @@ export function installEnvironment( ctx ) {
 
 	const { backgroundBuffer, floatTargets, gl, newTexture, parameters, program, texture, unbindArrays, upload, warn, white } = ctx;
 
-	// ---------------------------------------------------------------- environment
-
 	// Prefiltered environments in three.js's cube-UV layout, by source texture id and
 	// lodMax, and the frame's stack of them. They need half-float targets.
 	const environments = new Map(), levelBuffers = new Map();

@@ -37,7 +37,7 @@ export async function models() {
     data.warnings.map((w) => el('p', { class: 'muted' }, 'warning: ' + w)));
 }
 
-// --- Overview ---------------------------------------------------------------------
+// Overview 
 
 export async function overview(id, params) {
   const r = await api(`/models/${id}`);
@@ -115,7 +115,7 @@ function metadataDetails(id, focus) {
   return d;
 }
 
-// --- Vocabulary -------------------------------------------------------------------
+// Vocabulary
 
 export function vocab(id, params) {
   const q = el('input', { type: 'search', placeholder: 'search text, raw or id', size: 30, value: params?.get('q') || '' });
@@ -147,7 +147,7 @@ export function vocab(id, params) {
     results);
 }
 
-// --- Tensors ----------------------------------------------------------------------
+// Tensors
 
 export function tensors(id, params) {
   const layer = el('input', { placeholder: 'layer', size: 5, value: params.get('layer') || '' });
@@ -174,7 +174,7 @@ export function tensors(id, params) {
     results);
 }
 
-// --- Layers -----------------------------------------------------------------------
+// Layers
 
 export async function layers(id) {
   const d = await api(`/models/${id}/layers`);
@@ -192,7 +192,7 @@ export async function layers(id) {
     ], d.layers));
 }
 
-// --- Template ---------------------------------------------------------------------
+// Template
 
 function treeNode(n) {
   let label;
@@ -219,5 +219,3 @@ export async function template(id) {
     d.ollama_system ? el('p', {}, 'SYSTEM: ', el('code', {}, d.ollama_system)) : '',
     d.ollama_params ? kv(d.ollama_params) : '');
 }
-
-// --- Stats ------------------------------------------------------------------------

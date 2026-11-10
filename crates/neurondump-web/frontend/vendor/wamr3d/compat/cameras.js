@@ -4,8 +4,6 @@ import { w } from './engine.js';
 import { Matrix4 } from './math.js';
 import { Object3D } from './object3d.js';
 
-// ---------------------------------------------------------------- cameras
-
 export class Camera extends Object3D {
 
 	constructor() {

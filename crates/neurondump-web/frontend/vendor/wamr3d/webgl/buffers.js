@@ -11,8 +11,6 @@ export function installBuffers( ctx ) {
 
 	const { FACTORS, TEXTURE_SLOTS, gl, ranges } = ctx;
 
-	// ---------------------------------------------------------------- buffers
-
 	const info = { calls: 0, shadowCalls: 0, triangles: 0, candidates: 0, geometries: 0, textures: 0, pipelines: 0, uploads: 0 };
 
 	function upload( target, data, existing ) {
@@ -404,8 +402,6 @@ export function installBuffers( ctx ) {
 		}
 
 	}
-
-	// ---------------------------------------------------------------- state
 
 	// Blend factors by three.js blending mode (see `BLEND_FACTORS`).
 	const BLENDS = [

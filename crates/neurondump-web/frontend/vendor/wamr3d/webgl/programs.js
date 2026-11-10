@@ -11,7 +11,6 @@ export function installPrograms( ctx ) {
 
 	const { gl, warn } = ctx;
 
-	// ---------------------------------------------------------------- programs
 
 	const programs = new Map();
 
@@ -118,7 +117,6 @@ export function installPrograms( ctx ) {
 
 	};
 
-	// ---------------------------------------------------------------- shader materials
 
 	// three.js's prefixes of `ShaderMaterial` code: GLSL 1 style source compiled as GLSL ES
 	// 3.00, the built-in uniforms and attributes, and the common `#include`s. The user's

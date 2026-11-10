@@ -4,24 +4,26 @@
 import { count, bytes } from './ui.js';
 import { loadWamr, createRenderer, cssVar } from './wamr.js';
 import { structure, LAYOUTS, containerBounds } from './graph3d-layout.js';
+import { createControlPanel, loadSettings } from './graph3d-controls.js';
+import { createMinimap } from './graph3d-minimap.js';
 
 export const MODES = { '2d': '2D', tower: '3D tower', city: '3D city', force: '3D force' };
 
-let OrbitControls = null;
+let NAV = null; // navigation mode -> controls class
 async function loadLib() {
   const w = await loadWamr();
-  OrbitControls = w.OrbitControls;
+  NAV = { orbit: w.OrbitControls, map: w.MapControls, trackball: w.TrackballControls };
   return w.T;
 }
 
 /**
  * Creates the 3D view inside `container`. Throws when wamr3d cannot start (no WebGPU and no
  * WebGL 2); the caller then keeps the 2D view.
- * opts: { onTap(id), onDblTap(id) }
+ * opts: { onTap(id), onDblTap(id), backend: 'auto' | 'webgpu' | 'webgl', viewsKey (localStorage key of the saved camera views) }
  */
 export async function createGraph3D(container, opts = {}) {
   const T = await loadLib();
-  const { renderer, backend } = await createRenderer(T);
+  const { renderer, backend } = await createRenderer(T, opts.backend);
 
   const root = document.createElement('div');
   root.className = 'graph3d';
@@ -40,20 +42,80 @@ export async function createGraph3D(container, opts = {}) {
   sun.position.set(30, 60, 40);
   scene.add(sun);
 
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.12;
-  controls.screenSpacePanning = true;
-  // 2D: straight-on view, left drag pans, no rotation; 3D: orbit.
+  const settings = loadSettings();
+  let controls = null;
+  const navKind = () => (mode === '2d' ? 'orbit' : NAV[settings.nav] ? settings.nav : 'orbit');
+  // Creates the controls of the current navigation mode, keeping the camera where it is.
+  // orbit: left drag orbits around a fixed up; map: left drag pans the ground, right drag
+  // orbits; trackball: free rotation over the poles (wamr3d's TrackballControls).
+  function makeControls() {
+    const kind = navKind();
+    if (controls?.kind === kind) return;
+    const target = controls ? controls.target.clone() : new T.Vector3();
+    controls?.dispose();
+    // Orbit and map keep the world up; a trackball may have tilted it.
+    camera.up.set(0, 1, 0);
+    controls = new NAV[kind](camera, renderer.domElement);
+    controls.kind = kind;
+    controls.target.copy(target);
+    if (kind === 'trackball') controls.keys = []; // A/S/D would clash with WASD panning
+    else controls.screenSpacePanning = kind === 'orbit';
+    controls.maxDistance = radius * 8;
+    controls.minDistance = 0.5;
+    controls.addEventListener('change', () => { dirty = true; });
+    controls.update();
+  }
+
+  // 2D: straight-on view, left drag pans, no rotation; 3D: the chosen navigation mode.
   function applyModeControls() {
+    makeControls();
     const flat = mode === '2d';
-    controls.enableRotate = !flat;
-    controls.mouseButtons = flat
-      ? { LEFT: T.MOUSE.PAN, MIDDLE: T.MOUSE.DOLLY, RIGHT: T.MOUSE.PAN }
-      : { LEFT: T.MOUSE.ROTATE, MIDDLE: T.MOUSE.DOLLY, RIGHT: T.MOUSE.PAN };
-    controls.touches = flat ? { ONE: T.TOUCH.PAN, TWO: T.TOUCH.DOLLY_PAN } : { ONE: T.TOUCH.ROTATE, TWO: T.TOUCH.DOLLY_PAN };
-    camera.fov = flat ? 20 : 45;
-    camera.updateProjectionMatrix();
+    if (controls.kind === 'orbit') {
+      controls.enableRotate = !flat;
+      controls.mouseButtons = flat
+        ? { LEFT: T.MOUSE.PAN, MIDDLE: T.MOUSE.DOLLY, RIGHT: T.MOUSE.PAN }
+        : { LEFT: T.MOUSE.ROTATE, MIDDLE: T.MOUSE.DOLLY, RIGHT: T.MOUSE.PAN };
+      controls.touches = flat ? { ONE: T.TOUCH.PAN, TWO: T.TOUCH.DOLLY_PAN } : { ONE: T.TOUCH.ROTATE, TWO: T.TOUCH.DOLLY_PAN };
+    }
+    applySettings();
+    panel?.sync();
+  }
+
+  // Panel settings -> controls, camera and scene.
+  function applySettings() {
+    makeControls();
+    const flat = mode === '2d';
+    if (controls.kind === 'trackball') {
+      // Trackball speeds are on another scale; these make 1x feel like the orbit's 1x.
+      controls.rotateSpeed = 2.5 * settings.rotateSpeed;
+      controls.panSpeed = 0.8 * settings.panSpeed;
+      controls.zoomSpeed = 1.2 * settings.zoomSpeed;
+      controls.staticMoving = !(settings.damping > 0);
+      controls.dynamicDampingFactor = settings.damping || 0.2;
+    } else {
+      controls.rotateSpeed = settings.rotateSpeed;
+      controls.panSpeed = settings.panSpeed;
+      controls.zoomSpeed = settings.zoomSpeed;
+      controls.enableDamping = settings.damping > 0;
+      controls.dampingFactor = settings.damping || 0.1;
+      controls.zoomToCursor = settings.zoomToCursor;
+      controls.autoRotate = settings.autoRotate && !flat;
+      controls.autoRotateSpeed = settings.autoRotateSpeed;
+    }
+    const fov = flat ? 20 : settings.fov;
+    if (camera.fov !== fov) {
+      // Keep the apparent size: move the camera so the target fills the same share of the view.
+      const off = camera.position.clone().sub(controls.target);
+      const k = Math.tan((camera.fov * Math.PI) / 360) / Math.tan((fov * Math.PI) / 360);
+      camera.position.copy(controls.target).add(off.multiplyScalar(k));
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+      controls.update();
+    }
+    for (const { line, opacity } of edgeLines) { line.visible = settings.edges; line.material.opacity = opacity * settings.edgeOpacity; }
+    for (const it of items.values()) if (it.line) it.line.visible = settings.outlines;
+    labels.hidden = !settings.labels;
+    dirty = true;
   }
 
   const boxGeo = new T.BoxGeometry(1, 1, 1);
@@ -68,6 +130,8 @@ export async function createGraph3D(container, opts = {}) {
   let pos = new Map(); let boxes = new Map();
   const items = new Map(); // id -> { mesh, mat, outline, container }
   let pickables = [];
+  let edgeLines = []; // { line, opacity }
+  let panel = null;
   let labelList = [];
   let dirty = true;
   let radius = 10;
@@ -88,6 +152,7 @@ export async function createGraph3D(container, opts = {}) {
     renderer.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    controls?.handleResize?.();
     dirty = true;
   }
   const ro = new ResizeObserver(resize);
@@ -105,15 +170,100 @@ export async function createGraph3D(container, opts = {}) {
     content.clear();
     items.clear();
     pickables = [];
+    edgeLines = [];
     labelList = [];
     labels.replaceChildren();
   }
 
+  // Size by a metric: city buildings get taller, other layouts shrink the smaller nodes.
+  const METRICS = { params: (n) => Math.sqrt(n.params || 0), bytes: (n) => Math.sqrt(n.bytes || 0), importance: (n) => n.importance?.score ?? 0 };
+  function shape(s) {
+    const metric = METRICS[settings.sizeBy];
+    if (metric) {
+      let max = 0;
+      for (const id of pos.keys()) max = Math.max(max, metric(s.byId.get(id).n));
+      for (const [id, p] of pos) {
+        const k = max > 0 ? metric(s.byId.get(id).n) / max : 1;
+        if (mode === 'city') {
+          const base = p.y - p.sy / 2;
+          p.sy = Math.max(0.05, p.sy * (0.15 + 1.85 * k));
+          p.y = base + p.sy / 2;
+        } else {
+          const f = 0.25 + 0.75 * k;
+          p.sx *= f; p.sy *= f; if (mode !== '2d') p.sz *= f;
+        }
+      }
+    }
+    // Explode: spread the nodes from the centre without growing them.
+    const e = settings.explode;
+    if (e !== 1 && pos.size) {
+      const c = [0, 0, 0];
+      for (const p of pos.values()) { c[0] += p.x; c[1] += p.y; c[2] += p.z; }
+      c.forEach((v, i) => { c[i] = v / pos.size; });
+      for (const p of pos.values()) {
+        p.x = c[0] + (p.x - c[0]) * e; p.y = c[1] + (p.y - c[1]) * e;
+        if (mode !== '2d') p.z = c[2] + (p.z - c[2]) * e;
+      }
+    }
+  }
+
+  // Nodes within `depth` connections (dataflow edges and containment) of `start`, as leaves.
+  function isolateSet(s, start, depth) {
+    const adj = new Map();
+    const link = (a, b) => {
+      if (!adj.has(a)) adj.set(a, new Set());
+      if (!adj.has(b)) adj.set(b, new Set());
+      adj.get(a).add(b); adj.get(b).add(a);
+    };
+    for (const e of view.edges) if (e.kind !== 'contains' && s.byId.has(e.from) && s.byId.has(e.to)) link(e.from, e.to);
+    for (const n of view.nodes) if (n.parent && s.byId.has(n.parent)) link(n.id, n.parent);
+    let frontier = [start];
+    const seen = new Set(frontier);
+    for (let d = 0; d < depth; d++) {
+      const next = [];
+      for (const x of frontier) for (const y of adj.get(x) || []) if (!seen.has(y)) { seen.add(y); next.push(y); }
+      frontier = next;
+    }
+    // The selection's own containers are only the way to its siblings: never open them whole.
+    const ancestors = new Set();
+    for (let p = s.byId.get(start)?.n.parent; p && s.byId.has(p); p = s.byId.get(p).n.parent) ancestors.add(p);
+    const leaves = new Set();
+    const down = (id) => { if (pos.has(id)) leaves.add(id); for (const k of s.kids.get(id) || []) down(k); };
+    for (const id of seen) if (!ancestors.has(id)) down(id);
+    return leaves;
+  }
+
+  // The leaves to draw: isolation around the selection, then the slice plane. null = all.
+  let slice = null; // { axis, lo, hi } of the full layout, for the minimap and the slider
+  function visible(s) {
+    let keep = null;
+    if (settings.isolate && marks.selected && s.byId.has(marks.selected)) keep = isolateSet(s, marks.selected, settings.isolateDepth);
+    slice = null;
+    const ax = settings.sliceAxis;
+    if (ax === 'x' || ax === 'y' || ax === 'z') {
+      const sz = 's' + ax;
+      let lo = Infinity; let hi = -Infinity;
+      for (const p of pos.values()) { lo = Math.min(lo, p[ax] - p[sz] / 2); hi = Math.max(hi, p[ax] + p[sz] / 2); }
+      const cut = lo + (hi - lo) * settings.slice;
+      slice = { axis: ax, lo, hi, cut };
+      if (settings.slice < 1) {
+        const inSlice = new Set([...pos].filter(([, p]) => p[ax] - p[sz] / 2 <= cut).map(([id]) => id));
+        keep = keep ? new Set([...keep].filter((x) => inSlice.has(x))) : inSlice;
+      }
+    }
+    return keep;
+  }
+
+  let fullPos = new Map(); // the whole layout, before isolation and slicing (for the minimap)
   function rebuild(refit = true) {
     if (!view) return;
     clear();
     const s = structure(view);
     pos = LAYOUTS[mode](view, s);
+    shape(s);
+    fullPos = pos;
+    const keep = visible(s);
+    if (keep) pos = new Map([...pos].filter(([id]) => keep.has(id)));
     boxes = containerBounds(view, s, pos, mode === '2d' ? 1 : 0);
     const muted = cssVar('--muted', '#777777');
     const border = cssVar('--border', '#cccccc');
@@ -173,6 +323,7 @@ export async function createGraph3D(container, opts = {}) {
       const line = new T.LineSegments(geo, new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity }));
       line.userData.ownGeometry = true; line.userData.ownMaterial = true;
       content.add(line);
+      edgeLines.push({ line, opacity });
     };
     addLines(batches.main, accent, 0.85);
     addLines(batches.faint, mutedC, 0.3);
@@ -191,10 +342,12 @@ export async function createGraph3D(container, opts = {}) {
     }
 
     let all = [...pos.values(), ...boxes.values()];
+    if (!all.length) all = [...fullPos.values()];
     const c = all.reduce((acc, q) => [acc[0] + q.x, acc[1] + q.y, acc[2] + q.z], [0, 0, 0]).map((v) => v / Math.max(1, all.length));
     radius = Math.max(4, ...all.map((q) => Math.hypot(q.x - c[0], q.y - c[1], q.z - c[2]) + Math.max(q.sx, q.sy, q.sz) / 2));
     controls.maxDistance = radius * 8;
     controls.minDistance = 0.5;
+    applySettings();
     applyMarks();
     if (refit) fit();
     dirty = true;
@@ -231,7 +384,8 @@ export async function createGraph3D(container, opts = {}) {
 
   // Frames the given ids (or everything) from the current direction.
   function fit(ids, keepDir = false) {
-    const list = (ids?.length ? ids : [...pos.keys(), ...boxes.keys()]).map((id) => pos.get(id) || boxes.get(id)).filter(Boolean);
+    let list = (ids?.length ? ids : [...pos.keys(), ...boxes.keys()]).map((id) => pos.get(id) || boxes.get(id)).filter(Boolean);
+    if (!list.length && !ids?.length) list = [...fullPos.values()];
     if (!list.length) return;
     const lo = [Infinity, Infinity, Infinity]; const hi = [-Infinity, -Infinity, -Infinity];
     for (const q of list) {
@@ -239,6 +393,7 @@ export async function createGraph3D(container, opts = {}) {
       hi[0] = Math.max(hi[0], q.x + q.sx / 2); hi[1] = Math.max(hi[1], q.y + q.sy / 2); hi[2] = Math.max(hi[2], q.z + q.sz / 2);
     }
     const center = new T.Vector3((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2);
+    if (!keepDir) camera.up.set(0, 1, 0);
     const r = Math.max(1, Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2);
     const fov = (camera.fov * Math.PI) / 180;
     const dist = (r / Math.tan(Math.min(fov, 2 * Math.atan(Math.tan(fov / 2) * camera.aspect)) / 2)) * 1.12;
@@ -250,6 +405,7 @@ export async function createGraph3D(container, opts = {}) {
     camera.near = Math.max(0.05, dist / 200);
     camera.far = dist * 20 + radius * 4;
     camera.updateProjectionMatrix();
+    controls.stop?.();
     controls.update();
     // The sphere estimate overshoots for long, flat layouts: refine on the projected corners.
     const corner = new T.Vector3();
@@ -276,12 +432,41 @@ export async function createGraph3D(container, opts = {}) {
     dirty = true;
   }
 
-  // --- labels ---------------------------------------------------------------------------
+  // Camera views: get / set, for saved views and shared links.
+  const r3 = (v) => [v.x, v.y, v.z].map((x) => Math.round(x * 1000) / 1000);
+  function getView() {
+    return { mode, t: r3(controls.target), p: r3(camera.position), u: r3(camera.up), fov: camera.fov };
+  }
+  function setView(v) {
+    if (!v?.t || !v?.p) return;
+    if (v.u) camera.up.set(...v.u);
+    controls.stop?.();
+    controls.target.set(...v.t);
+    camera.position.set(...v.p);
+    controls.update();
+    dirty = true;
+  }
+
+  // Looks at the target from a preset direction, keeping the distance.
+  const VIEWS = { front: [0, 0, 1], top: [0, 1, 0.001], side: [1, 0, 0], iso: [1, 0.8, 1] };
+  function lookFrom(name) {
+    const d = VIEWS[name];
+    if (!d || mode === '2d') return;
+    const dist = camera.position.distanceTo(controls.target);
+    camera.up.set(0, 1, 0);
+    controls.stop?.();
+    camera.position.copy(controls.target).add(new T.Vector3(...d).setLength(dist));
+    controls.update();
+    dirty = true;
+  }
+
+  // labels
   const v = new T.Vector3();
   function updateLabels() {
+    if (!settings.labels) return;
     const w = root.clientWidth; const h = root.clientHeight;
     const placed = [];
-    const maxLabels = 160;
+    const maxLabels = settings.maxLabels;
     let shown = 0;
     for (const { id, el } of labelList) {
       const q = boxes.get(id) || pos.get(id);
@@ -309,7 +494,7 @@ export async function createGraph3D(container, opts = {}) {
     }
   }
 
-  // --- picking --------------------------------------------------------------------------
+  // picking
   const ray = new T.Raycaster();
   const ndc = new T.Vector2();
   function pick(ev) {
@@ -329,7 +514,11 @@ export async function createGraph3D(container, opts = {}) {
     down = null;
     if (moved > 5) return;
     const id = pick(ev);
-    if (id) { marks.selected = id; applyMarks(); opts.onTap?.(id); }
+    if (!id) return;
+    const changed = marks.selected !== id;
+    marks.selected = id;
+    if (settings.isolate && changed) rebuild(false); else applyMarks();
+    opts.onTap?.(id);
   };
   const onDbl = (ev) => { const id = pick(ev); if (id) opts.onDblTap?.(id); };
   let hoverPending = null;
@@ -357,14 +546,49 @@ export async function createGraph3D(container, opts = {}) {
   cv.addEventListener('dblclick', onDbl);
   cv.addEventListener('pointermove', onMove);
   cv.addEventListener('pointerleave', onLeave);
-  controls.addEventListener('change', () => { dirty = true; });
+  // The trackball maps pointers by the canvas's place on the page, which layout can move.
+  const onRootDown = () => controls.handleResize?.();
+  root.addEventListener('pointerdown', onRootDown, true);
 
+  const minimap = createMinimap({
+    root, settings,
+    mode: () => mode,
+    items: () => ({ pos: fullPos, shown: pos, slice }),
+    camera, controls: () => controls,
+    colorOf: (id) => items.get(id)?.mat.color,
+    dirty: () => { dirty = true; },
+  });
+
+  panel = createControlPanel({
+    root, canvas: cv, controls: () => controls, settings,
+    viewsKey: opts.viewsKey,
+    getView, setView,
+    rebuild: () => rebuild(false),
+    hasSelection: () => !!marks.selected,
+    isFlat: () => mode === '2d',
+    fit: () => fit(undefined, true),
+    reset: () => fit(undefined, false),
+    zoomBy,
+    view: lookFrom,
+    apply: applySettings,
+    dirty: () => { dirty = true; },
+  });
+  applyModeControls();
+
+  let last = performance.now();
   renderer.setAnimationLoop(() => {
-    const moving = controls.update();
+    const now = performance.now();
+    const dt = (now - last) / 1000;
+    const held = panel.tick(dt);
+    last = now;
+    // The trackball has no auto-rotate of its own: same pace as the orbit's (speed 2 = 30 s a turn).
+    if (controls.kind === 'trackball' && settings.autoRotate && mode !== '2d') controls.rotateLeft((Math.PI / 30) * settings.autoRotateSpeed * Math.min(dt, 0.05));
+    const moving = controls.update() || held;
     if (!moving && !dirty) return;
     dirty = false;
     renderer.render(scene, camera);
     updateLabels();
+    minimap.draw();
   });
 
   theme();
@@ -389,7 +613,14 @@ export async function createGraph3D(container, opts = {}) {
       dirty = true;
     },
     /** cut / removed: Sets of ids; match: Set of ids or null; selected: id or null. */
-    setMarks(next) { marks = { ...marks, ...next }; applyMarks(); },
+    setMarks(next) {
+      const sel = marks.selected;
+      marks = { ...marks, ...next };
+      // Isolation follows the selection.
+      if (settings.isolate && marks.selected !== sel) rebuild(false); else applyMarks();
+    },
+    getView,
+    setView,
     fit: (ids) => fit(ids, true),
     zoomBy,
     resetZoom: () => fit(undefined, true),
@@ -404,6 +635,9 @@ export async function createGraph3D(container, opts = {}) {
       cv.removeEventListener('dblclick', onDbl);
       cv.removeEventListener('pointermove', onMove);
       cv.removeEventListener('pointerleave', onLeave);
+      root.removeEventListener('pointerdown', onRootDown, true);
+      minimap.dispose();
+      panel.dispose();
       clear();
       controls.dispose();
       boxGeo.dispose(); edgeGeo.dispose();

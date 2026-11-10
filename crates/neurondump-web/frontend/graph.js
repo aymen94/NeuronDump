@@ -9,9 +9,10 @@ import { el, bytes, count, esc, table, errorBox, toast, store } from './ui.js';
 import { jobWithProgress, planView } from './views.js';
 import { createGraph3D } from './graph3d.js';
 import { createFlow3D } from './flow3d.js';
-import { noGpuMessage } from './wamr.js';
+import { noGpuMessage, requestedBackend, saveBackend, BACKEND_CHOICES } from './wamr.js';
 import { session, editedNodes, loadEdits, pushEdit } from './session.js';
 import { diffRows } from './diff.js';
+import { ROLE_COLORS } from './probes.js';
 
 const LEVELS = ['section', 'layer', 'block', 'tensor'];
 const LAYOUTS3D = { flow: 'dataflow', tower: 'tower', city: 'city', force: 'force' };
@@ -49,16 +50,24 @@ export async function graph(id, params) {
     layout3d: LAYOUTS3D[savedView] ? savedView : (LAYOUTS3D[store.get('nd-graph-layout3d')] ? store.get('nd-graph-layout3d') : 'flow'),
   };
   const s = session(id);
+  // A shared camera view: cam=tx,ty,tz,px,py,pz,ux,uy,uz (applied after the first render).
+  let pendingCam = (() => {
+    const c = (params?.get('cam') || '').split(',').map(Number);
+    return c.length === 9 && c.every(Number.isFinite) ? { t: c.slice(0, 3), p: c.slice(3, 6), u: c.slice(6, 9) } : null;
+  })();
   if (params?.get('highlight') === '1') {
     // Coming from a token journey: open the layers that hold the contributing nodes.
     for (const h of s.highlight) { const m = /^layer\.(\d+)/.exec(h); if (m) state.expand.add(`layer.${m[1]}`); }
   }
   const levelSel = selectEl(LEVELS, state.level, 'level');
   const groupSel = selectEl(GROUPS, state.groupBy, 'group by');
-  const colorSel = selectEl(isLocal() ? COLORS : [...COLORS, 'damage', 'flow', 'diff'], state.color, 'color by');
+  const colorSel = selectEl(isLocal() ? COLORS : [...COLORS, 'damage', 'flow', 'diff', 'role', 'rank'], state.color, 'color by');
   const search = el('input', { type: 'search', placeholder: 'search nodes / tensors (Enter flies to it)', size: 26 });
   const info = el('span', { class: 'muted' });
-  const backendBadge = el('span', { class: 'badge-backend', title: 'wamr3d renderer backend (auto: WebGPU, else WebGL 2)' }, '…');
+  const backendBadge = el('span', { class: 'badge-backend', title: 'wamr3d renderer backend in use' }, '…');
+  const backendSel = el('select', { title: 'Renderer: Auto tries WebGPU, then WebGL 2' },
+    Object.entries(BACKEND_CHOICES).map(([v, label]) => el('option', { value: v, selected: v === requestedBackend() }, label)));
+  const backendLbl = el('label', { class: 'backend-pick' }, 'renderer ', backendSel, ' ', backendBadge);
   const dimBtns = { '2d': el('button', { 'aria-checked': String(state.dim === '2d'), onclick: () => setDim('2d') }, '2D'), '3d': el('button', { 'aria-checked': String(state.dim === '3d'), onclick: () => setDim('3d') }, '3D') };
   const layoutSel = el('select', {}, Object.entries(LAYOUTS3D).map(([v, label]) => el('option', { value: v, selected: v === state.layout3d }, label)));
   const layoutLbl = el('label', { hidden: state.dim === '2d' }, '3D layout ', layoutSel);
@@ -73,7 +82,7 @@ export async function graph(id, params) {
   const useFlow = () => state.dim === '3d' && state.layout3d === 'flow';
   const cur = () => (useFlow() ? gf : g2);
 
-  // --- colors ---------------------------------------------------------------------------
+  // colors
   const sectionOf = (nid, byId) => {
     let n = byId.get(nid);
     while (n && n.parent && byId.has(n.parent)) n = byId.get(n.parent);
@@ -125,6 +134,61 @@ export async function graph(id, params) {
     }
     return null;
   };
+  // Head roles (probes page): head id -> score, layer -> most common specific role.
+  let roleCache = null;
+  const roleIndex = () => {
+    const r = s.heads;
+    if (!r) return null;
+    if (roleCache?.r === r) return roleCache;
+    const byHead = new Map(); const perLayer = new Map();
+    for (const h of r.heads) {
+      byHead.set(`layer.${h.layer}.attn.head.${h.head}`, h);
+      if (['mixed', 'sink'].includes(h.role)) continue;
+      const m = perLayer.get(h.layer) || new Map();
+      m.set(h.role, (m.get(h.role) || 0) + 1);
+      perLayer.set(h.layer, m);
+    }
+    const dominant = new Map([...perLayer].map(([l, m]) => [l, [...m].sort((a, b) => b[1] - a[1])[0][0]]));
+    roleCache = { r, byHead, dominant };
+    return roleCache;
+  };
+  const roleOf = (n) => {
+    const d = roleIndex();
+    if (!d) return null;
+    const h = d.byHead.get(n.id);
+    if (h) return { role: h.role, head: h };
+    if (n.layer != null && (n.kind === 'layer' || n.block === 'attention')) return { role: d.dominant.get(n.layer) || 'mixed' };
+    return null;
+  };
+  // Weight spectrum (probes page): stable-rank share per tensor, block (mean) and layer (mean).
+  let rankCache = null;
+  const rankIndex = () => {
+    const r = s.spectrum;
+    if (!r) return null;
+    if (rankCache?.r === r) return rankCache;
+    const byTensor = new Map(); const groups = new Map();
+    const add = (k, v) => { const g = groups.get(k) || []; g.push(v); groups.set(k, g); };
+    for (const t of r.tensors) {
+      byTensor.set(`t.${t.name}`, t.rank_ratio);
+      if (t.layer == null) continue;
+      const role = t.name.split('.')[2] || '';
+      add(`l${t.layer}`, t.rank_ratio);
+      add(`l${t.layer}:${role.startsWith('ffn') ? 'ffn' : role.startsWith('attn') ? 'attention' : 'other'}`, t.rank_ratio);
+    }
+    const mean = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+    const byGroup = new Map([...groups].map(([k, v]) => [k, mean(v)]));
+    const all = [...byTensor.values()].filter((v) => v > 0);
+    rankCache = { r, byTensor, byGroup, lo: Math.log(Math.min(...all)), hi: Math.log(Math.max(...all)) };
+    return rankCache;
+  };
+  const rankOf = (n) => {
+    const d = rankIndex();
+    if (!d) return null;
+    const v = d.byTensor.get(n.id) ?? (n.layer != null ? d.byGroup.get(n.block ? `l${n.layer}:${n.block}` : `l${n.layer}`) : undefined);
+    if (v == null) return null;
+    // Red = lowest stable rank (most compressible), on a log scale across the model.
+    return { value: v, score: d.hi > d.lo ? 1 - (Math.log(Math.max(v, 1e-9)) - d.lo) / (d.hi - d.lo) : 0 };
+  };
   function colorOf(n, byId) {
     switch (state.color) {
       case 'section': return catColor('s:' + sectionOf(n.id, byId));
@@ -144,6 +208,14 @@ export async function graph(id, params) {
         const v = n.layer != null ? flowValues().get(n.layer) : undefined;
         if (!v) return '#dddddd';
         return heat(n.block === 'attention' || n.block === 'ssm' ? v.attn : n.block === 'ffn' || n.block === 'moe' ? v.ffn : v.total);
+      }
+      case 'role': {
+        const r = roleOf(n);
+        return r ? ROLE_COLORS[r.role] || '#dddddd' : '#8a9099';
+      }
+      case 'rank': {
+        const r = rankOf(n);
+        return r ? heat(r.score) : '#dddddd';
       }
       default: return REMOVABLE[n.removable] || '#cccccc';
     }
@@ -168,9 +240,9 @@ export async function graph(id, params) {
   };
   const marks = () => ({ cut: new Set(state.selection), removed: state.removed, edited: visible(editedNodes(id)), highlight: visible(s.highlight) });
 
-  // --- renderers --------------------------------------------------------------------------
+  // renderers
   async function ensure() {
-    const opts = { onTap: (nid) => showNode(nid), onDblTap: (nid) => toggleExpand(nid) };
+    const opts = { onTap: (nid) => showNode(nid), onDblTap: (nid) => toggleExpand(nid), backend: backendSel.value, viewsKey: `nd-graph3d-views-${id}` };
     if (useFlow()) {
       if (!gf && !failedF) {
         try { gf = await createFlow3D(canvasF, opts); } catch (e) { failedF = true; canvasF.replaceChildren(errorBox(new Error(noGpuMessage(e)))); }
@@ -194,6 +266,7 @@ export async function graph(id, params) {
     if (!r) return;
     if (!useFlow()) r.setMode(state.dim === '2d' ? '2d' : state.layout3d);
     r.setData(v, colorFn(), refit);
+    if (pendingCam && r.setView) { r.setView(pendingCam); pendingCam = null; }
     r.setMarks(marks());
   }
 
@@ -242,7 +315,7 @@ export async function graph(id, params) {
     reload();
   }
 
-  // --- search ------------------------------------------------------------------------------
+  // search
   let tensorIndex = null;
   async function applySearch(fly = true) {
     const r = cur();
@@ -269,7 +342,7 @@ export async function graph(id, params) {
   }
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') applySearch(true); });
 
-  // --- token flow -----------------------------------------------------------------------------
+  // token flow 
   flowBtn.addEventListener('click', async () => {
     if (!gf) return;
     if (gf.flowing) { gf.stopFlow(); flowBtn.textContent = '▶ token flow'; return; }
@@ -288,8 +361,19 @@ export async function graph(id, params) {
     toast(`token flow: "${esc(tok?.text ?? '')}" (from the last journey; change it on the journey page)`);
   });
 
-  // --- node detail ---------------------------------------------------------------------------
+  // node detail
   const edit = (op, label) => el('button', { class: 'small', onclick: async () => { try { await pushEdit(id, op); toast(`edit added: ${label}`); } catch (e) { toast(e.message); } } }, label);
+  function probeSide(n) {
+    const rows = [];
+    const r = roleOf(n);
+    if (r?.head) {
+      const h = r.head;
+      rows.push(el('tr', {}, el('th', {}, 'head role'), el('td', {}, el('span', { class: 'swatch', style: `background:${ROLE_COLORS[h.role]}` }), `${h.role} · induction ${h.induction.toFixed(2)} · prev ${h.prev_token.toFixed(2)} · dup ${h.duplicate.toFixed(2)} · sink ${h.sink.toFixed(2)}`)));
+    } else if (r) rows.push(el('tr', {}, el('th', {}, 'head roles'), el('td', {}, `most common specific role: ${r.role}`)));
+    const k = rankOf(n);
+    if (k) rows.push(el('tr', {}, el('th', {}, 'stable rank'), el('td', {}, `${(k.value * 100).toFixed(2)}% of full rank${n.kind === 'tensor' ? '' : ' (mean)'}`)));
+    return rows;
+  }
   function diffSide(nid) {
     const d = diffOf(nid);
     if (!d) return [];
@@ -318,7 +402,7 @@ export async function graph(id, params) {
           stats ? el('tr', {}, el('th', {}, 'weights'), el('td', {}, stats)) : '',
           n.activation ? el('tr', {}, el('th', {}, 'activation'), el('td', {}, el('code', {}, JSON.stringify(n.activation)))) : '',
           n.info ? el('tr', {}, el('th', {}, 'info'), el('td', {}, el('code', {}, JSON.stringify(n.info)))) : '',
-          ...diffSide(n.id))),
+          ...diffSide(n.id), ...probeSide(n))),
         el('div', { class: 'row' },
           isLocal() ? '' : el('button', { class: cut ? '' : 'primary', onclick: () => { toggleCut(n.id); showNode(n.id); } }, cut ? 'Uncut' : 'Cut this'),
           (n.lazy || d.children.length) ? el('button', { onclick: () => toggleExpand(n.id) }, state.expand.has(n.id) ? 'Collapse' : 'Expand') : '',
@@ -329,6 +413,7 @@ export async function graph(id, params) {
           scalable ? [edit({ op: 'scale', target: n.id, factor: 0.5 }, '×0.5'), edit({ op: 'scale', target: n.id, factor: 2 }, '×2'),
             factor, el('button', { class: 'small', onclick: () => pushEdit(id, { op: 'scale', target: n.id, factor: Number(factor.value) }).then(() => toast('edit added')).catch((e) => toast(e.message)) }, 'scale')] : '',
           n.kind === 'layer' ? edit({ op: 'skip', layer: n.layer }, 'skip layer') : ''),
+        (n.kind === 'neuron_bucket' && !isLocal()) ? el('div', { class: 'row' }, el('a', { class: 'button', href: `#/model/${id}/probes?probe=neuron&layer=${n.layer}&neuron=${n.info?.start ?? 0}` }, `Explore neuron ${n.info?.start ?? 0} →`)) : '',
         d.children.length ? el('div', {}, el('h4', {}, `Contains (${d.children.length})`), table([
           { label: 'child', get: (c) => el('a', { href: '#', onclick: (e) => { e.preventDefault(); showNode(c.id); } }, c.label) },
           { label: 'kind', get: (c) => c.kind },
@@ -347,7 +432,6 @@ export async function graph(id, params) {
     }
   }
 
-  // --- selection + static impact -------------------------------------------------------
   const promptIn = el('input', { size: 40, value: s.prompt });
   const tokensIn = el('input', { type: 'number', min: 0, max: 64, value: 12, style: 'width:5em' });
   const corpusIn = el('textarea', { rows: 4, placeholder: 'Corpus for perplexity and sweeps (texts separated by blank lines)' }, SAMPLE_CORPUS);
@@ -487,7 +571,19 @@ export async function graph(id, params) {
         el('button', { disabled: !jobId, onclick: () => savePlan(null, { sweep_job: jobId, top: Number(topIn.value) || 1, force: state.force }) }, 'Save as plan → Slim')));
   }
 
-  // --- controls ------------------------------------------------------------------------
+  // Switching backend rebuilds both renderers on the new API.
+  backendSel.addEventListener('change', async () => {
+    saveBackend(backendSel.value);
+    gf?.stopFlow?.();
+    g2?.dispose(); gf?.dispose(); g2 = null; gf = null;
+    failed2 = false; failedF = false;
+    canvas2.replaceChildren(); canvasF.replaceChildren();
+    backendBadge.textContent = '…';
+    await render();
+    applySearch(false);
+  });
+
+  // controls
   levelSel.querySelector('select').addEventListener('change', (e) => { state.level = e.target.value; store.set('nd-graph-level', state.level); reload(); });
   groupSel.querySelector('select').addEventListener('change', (e) => { state.groupBy = e.target.value; reload(); });
   layoutSel.addEventListener('change', () => { state.layout3d = layoutSel.value; store.set('nd-graph-layout3d', state.layout3d); setDim('3d'); });
@@ -502,8 +598,21 @@ export async function graph(id, params) {
     el('span', { class: 'swatch', style: 'background:#f28e2b' }), 'edited ', el('span', { class: 'swatch', style: 'background:#8e44ad' }), 'token path');
   const diffLegend = el('span', { class: 'muted small' });
   function updateLegend() {
-    legend.hidden = state.color === 'diff';
-    diffLegend.hidden = state.color !== 'diff';
+    const special = ['diff', 'role', 'rank'].includes(state.color);
+    legend.hidden = special;
+    diffLegend.hidden = !special;
+    if (state.color === 'role') {
+      diffLegend.replaceChildren(...(s.heads
+        ? ['head roles: ', ...Object.entries(ROLE_COLORS).flatMap(([k, c]) => [el('span', { class: 'swatch', style: `background:${c}` }), k + ' ']), '(layers and attention blocks show their most common specific role; expand a block for its heads)']
+        : ['no head roles for this model yet: score them on the ', el('a', { href: `#/model/${id}/probes?probe=heads` }, 'Probes page')]));
+      return;
+    }
+    if (state.color === 'rank') {
+      diffLegend.replaceChildren(...(s.spectrum
+        ? ['stable rank: ', ...[1, 0.75, 0.5, 0.25, 0].map((v) => el('span', { class: 'swatch', style: `background:${heat(v)}` })), ' lowest (most compressible) → highest, log scale; blocks and layers show their mean ', el('span', { class: 'swatch', style: 'background:#dddddd' }), 'no data']
+        : ['no weight spectrum for this model yet: compute it on the ', el('a', { href: `#/model/${id}/probes?probe=spectrum` }, 'Probes page')]));
+      return;
+    }
     if (state.color !== 'diff') return;
     if (!s.diff) { diffLegend.replaceChildren('no diff for this model: run one on the ', el('a', { href: `#/diff?a=${id}` }, 'Diff page')); return; }
     diffLegend.replaceChildren(`diff vs ${s.diff.b.name}: `, ...[0, 0.25, 0.5, 0.75, 1].map((v) => el('span', { class: 'swatch', style: `background:${heat(v)}` })),
@@ -517,7 +626,7 @@ export async function graph(id, params) {
   window.addEventListener('nd-highlight', onHl);
 
   const node = el('section', { class: 'graph-view' },
-    el('div', { class: 'row' }, el('h2', {}, 'Graph'), el('span', { class: 'segmented', role: 'radiogroup' }, dimBtns['2d'], dimBtns['3d']), layoutLbl, backendBadge,
+    el('div', { class: 'row' }, el('h2', {}, 'Graph'), el('span', { class: 'segmented', role: 'radiogroup' }, dimBtns['2d'], dimBtns['3d']), layoutLbl, backendLbl,
       levelSel, groupSel, colorSel, search, zoomCtl, isLocal() ? '' : flowBtn,
       el('button', { onclick: () => { state.expand.clear(); reload(); } }, 'Collapse all'), clearHl, legend, diffLegend),
     info,

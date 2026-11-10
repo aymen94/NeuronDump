@@ -10,7 +10,6 @@ export function installTextures( ctx ) {
 
 	const { MIN_FILTER, WRAP, anisotropic, floatLinear, floatTargets, gl, program, samples, unbindArrays, warn } = ctx;
 
-	// ---------------------------------------------------------------- textures
 
 	function newTexture() {
 
@@ -188,7 +187,6 @@ export function installTextures( ctx ) {
 
 	}
 
-	// ---------------------------------------------------------------- render targets
 
 	// GL side of render targets by their texture id; `renderTargetTextures` gives the
 	// textures (colour attachments and the depth texture) materials can read.

@@ -7,11 +7,12 @@ import * as inspector from './inspector.js';
 import { edits as editsPage, mountDrawer } from './edits.js';
 import { loadEdits } from './session.js';
 import { diff as diffPage } from './diff.js';
+import { probes } from './probes.js';
 
 const MODEL_VIEWS = isLocal()
   ? ['overview', 'vocab', 'tensors', 'layers', 'graph', 'template', 'stats'] // browser demo: static inspection only
-  : ['overview', 'vocab', 'tensors', 'layers', 'graph', 'tokens', 'journey', 'timeline', 'edits', 'template', 'stats', 'analyze', 'trace'];
-const PAGES = { ...views, tokens: inspector.tokens, journey: inspector.journey, timeline: inspector.timeline, edits: editsPage };
+  : ['overview', 'vocab', 'tensors', 'layers', 'graph', 'tokens', 'journey', 'timeline', 'probes', 'edits', 'template', 'stats', 'analyze', 'trace'];
+const PAGES = { ...views, tokens: inspector.tokens, journey: inspector.journey, timeline: inspector.timeline, probes, edits: editsPage };
 const drawer = mountDrawer(() => currentModel);
 let current = null;
 let currentModel = '';
@@ -77,7 +78,7 @@ async function route() {
   }
 }
 
-// --- Header search ------------------------------------------------------------------
+// Header search
 
 const search = document.getElementById('search');
 let searchTimer = null;
@@ -105,7 +106,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !typing) { e.preventDefault(); search.focus(); search.select(); }
 });
 
-// --- Theme: System (default) / Light / Dark ------------------------------------------
+// Theme: System (default) / Light / Dark
 // "system" sets no attribute, so the CSS media query follows the OS, including live changes.
 
 function applyTheme(t) {
@@ -120,7 +121,6 @@ document.querySelectorAll('[data-theme-choice]').forEach((b) => b.addEventListen
   applyTheme(b.dataset.themeChoice);
 }));
 
-// --- Running jobs badge ---------------------------------------------------------------
 
 async function pollJobs() {
   const badge = document.getElementById('jobs-badge');

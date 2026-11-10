@@ -4,8 +4,6 @@ import { hosted, objects, w, world } from './engine.js';
 import { Ray, Vector2, Vector3, engineVector } from './math.js';
 import { Layers } from './transform.js';
 
-// ---------------------------------------------------------------- picking
-
 export class Raycaster {
 
 	constructor( origin = new Vector3(), direction = new Vector3( 0, 0, - 1 ), near = 0, far = Infinity ) {

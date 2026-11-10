@@ -8,7 +8,6 @@ export const SPHERE_KINDS = new Set(['head', 'kv_group', 'neuron_bucket', 'exper
 const MAIN = ['input', 'body', 'output'];
 const SIDE_ORDER = ['tokenizer', 'template', 'projector', 'vision', 'mtp', 'extra'];
 
-// --- layout -------------------------------------------------------------------------------
 
 export function layoutFlow(view) {
   const byId = new Map(view.nodes.map((n) => [n.id, n]));

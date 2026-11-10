@@ -6,13 +6,13 @@ import { el, table, errorBox, toast, progressBar } from './ui.js';
 import { session, setHighlight, pushEdit, loadEdits } from './session.js';
 import { vis, tokenChips } from './inspector.js';
 
-async function traceSupport(id) {
+export async function traceSupport(id) {
   const [info, m] = await Promise.all([api('/info'), api(`/models/${id}`)]);
   const arch = m.architecture.name;
   return { ok: info.trace_architectures.includes(arch), arch, list: info.trace_architectures };
 }
 
-function unsupported(t) {
+export function unsupported(t) {
   return el('div', { class: 'notice' },
     t.list.length
       ? `Runtime tracing does not support the "${t.arch}" architecture (supported: ${t.list.join(', ')}). The static token information on the tokens page still works.`
@@ -20,7 +20,7 @@ function unsupported(t) {
 }
 
 /** Runs a job with a progress line in `box`; resolves to the result. */
-async function job(box, kind, id, params) {
+export async function job(box, kind, id, params) {
   const line = el('div', { class: 'row' }, 'starting…');
   box.replaceChildren(line);
   let jid = null;
@@ -33,9 +33,9 @@ async function job(box, kind, id, params) {
   return api(`/jobs/${j.id}/result`);
 }
 
-// --- shared views -----------------------------------------------------------------------
 
-/** rows: number[][] (values 0..1 after normalizing per row max), drawn as a canvas. */
+/** rows: number[][] drawn as a canvas; values are normalized per row max, or taken as 0..1
+ * with opts.scale = 'abs'. */
 export function heatmap(rows, rowLabel, colLabel, opts = {}) {
   const cols = Math.max(1, ...rows.map((r) => r.length));
   const cw = Math.max(6, Math.min(28, Math.floor(720 / cols))); const ch = opts.cell || 14; const left = 64;
@@ -44,11 +44,11 @@ export function heatmap(rows, rowLabel, colLabel, opts = {}) {
   const dark = matchMedia('(prefers-color-scheme: dark)').matches && document.documentElement.getAttribute('data-theme') !== 'light' || document.documentElement.getAttribute('data-theme') === 'dark';
   g.font = '11px system-ui, sans-serif';
   rows.forEach((r, i) => {
-    const max = Math.max(1e-9, ...r);
+    const max = opts.scale === 'abs' ? 1 : Math.max(1e-9, ...r);
     g.fillStyle = dark ? '#ccc' : '#333';
     g.fillText(rowLabel(i), 2, i * ch + ch - 3);
     r.forEach((v, j) => {
-      const s = Math.max(0, v / max);
+      const s = Math.max(0, Math.min(1, v / max));
       g.fillStyle = `rgba(${dark ? '255,140,60' : '200,60,20'},${(0.06 + 0.94 * s).toFixed(3)})`;
       g.fillRect(left + j * cw, i * ch + 1, cw - 1, ch - 1);
     });
@@ -102,8 +102,6 @@ export function decisionView(id, d) {
 }
 
 
-// --- journey page -----------------------------------------------------------------------
-
 export async function journey(id, params) {
   const s = session(id);
   const t = await traceSupport(id);
@@ -111,7 +109,9 @@ export async function journey(id, params) {
   const chat = el('input', { type: 'checkbox', checked: params?.get('chat') === '1' || s.chat });
   const idx = el('input', { type: 'number', value: params?.get('token') ?? -1, style: 'width:5em' });
   const baseline = el('input', { type: 'checkbox' });
+  const other = el('input', { size: 50, placeholder: 'a second prompt to compare side by side' });
   const out = el('div', {});
+  const cmpBox = el('div', {});
   let headLayer = null;
 
   const render = (r) => {
@@ -161,6 +161,16 @@ export async function journey(id, params) {
     if (best !== null) showHeads(best);
   };
 
+  const compare = async () => {
+    if (!other.value.trim()) { toast('type a second prompt'); return; }
+    try {
+      const p = (text) => ({ prompt: text, chat: chat.checked, token: Number(idx.value), baseline: baseline.checked });
+      const a = await job(cmpBox, 'journey', id, p(prompt.value));
+      const b = await job(cmpBox, 'journey', id, p(other.value));
+      cmpBox.replaceChildren(compareView(a, b));
+    } catch (e) { cmpBox.replaceChildren(errorBox(e)); }
+  };
+
   const go = async () => {
     s.prompt = prompt.value; s.chat = chat.checked;
     try {
@@ -175,7 +185,11 @@ export async function journey(id, params) {
     el('div', { class: 'row' }, prompt, el('label', {}, chat, ' chat'), 'token #', idx, el('label', { title: 'ignore the edit stack' }, baseline, ' baseline'),
       el('button', { class: 'primary', disabled: !t.ok, onclick: go }, 'Follow token')),
     el('p', { class: 'muted small' }, 'Token index: 0 = first; negative counts from the end (-1 = last). Runs with the current edits unless "baseline" is checked.'),
-    out);
+    out,
+    el('h3', {}, 'Compare with another prompt'),
+    el('div', { class: 'row' }, other, el('button', { disabled: !t.ok, onclick: compare }, 'Compare side by side')),
+    el('p', { class: 'muted small' }, 'Follows the same token index in both prompts: where the logit lens diverges, and which layers push each decision.'),
+    cmpBox);
   if (t.ok) {
     loadEdits(id).catch(() => {});
     setTimeout(go, 0);
@@ -183,7 +197,33 @@ export async function journey(id, params) {
   return sec;
 }
 
-// --- generation timeline ---------------------------------------------------------------
+
+/** Two journeys of the same token index, layer by layer. */
+function compareView(a, b) {
+  const pred = (r) => (r.prediction[0] ? `"${vis(r.prediction[0].text)}" ${r.prediction[0].prob.toFixed(3)}` : '-');
+  const top = (l) => (l?.lens[0] ? `"${vis(l.lens[0].text)}" ${l.lens[0].prob.toFixed(2)}` : '-');
+  const push = (r, i) => r.decision?.layers.find((x) => x.layer === i);
+  const n = Math.max(a.layers.length, b.layers.length);
+  const rows = Array.from({ length: n }, (_, i) => ({ i, a: a.layers[i], b: b.layers[i], pa: push(a, i), pb: push(b, i) }));
+  const maxP = Math.max(1e-6, ...rows.flatMap((r) => [r.pa, r.pb].filter(Boolean).map((p) => Math.abs(p.attn) + Math.abs(p.ffn))));
+  const diverged = rows.find((r) => r.a && r.b && r.a.lens[0]?.id !== r.b.lens[0]?.id);
+  return el('div', {},
+    el('div', { class: 'grid2' },
+      el('div', {}, el('strong', {}, 'A '), `token #${a.position} "${vis(a.tokens[a.position].text)}" → ${pred(a)}`),
+      el('div', {}, el('strong', {}, 'B '), `token #${b.position} "${vis(b.tokens[b.position].text)}" → ${pred(b)}`)),
+    el('p', {}, diverged ? `The logit lens first differs at layer ${diverged.i}.` : 'The logit lens agrees at every layer.',
+      ` Target first top-1: A layer ${a.first_top1 ?? '-'}, B layer ${b.first_top1 ?? '-'}.`),
+    table([
+      { label: 'layer', get: (r) => r.i, num: true },
+      { label: 'lens A', get: (r) => top(r.a) },
+      { label: 'lens B', get: (r) => el('span', { class: r.a?.lens[0]?.id !== r.b?.lens[0]?.id ? 'diverge' : '' }, top(r.b)) },
+      { label: 'P(target) A', get: (r) => (r.a ? r.a.target_prob.toFixed(3) : '-'), num: true, sort: (r) => r.a?.target_prob ?? 0 },
+      { label: 'P(target) B', get: (r) => (r.b ? r.b.target_prob.toFixed(3) : '-'), num: true, sort: (r) => r.b?.target_prob ?? 0 },
+      { label: 'push A', get: (r) => (r.pa ? el('span', {}, bar(Math.abs(r.pa.attn) + Math.abs(r.pa.ffn), maxP), ` ${(r.pa.attn + r.pa.ffn).toFixed(2)}`) : '-'), sort: (r) => (r.pa ? r.pa.attn + r.pa.ffn : 0) },
+      { label: 'push B', get: (r) => (r.pb ? el('span', {}, bar(Math.abs(r.pb.attn) + Math.abs(r.pb.ffn), maxP), ` ${(r.pb.attn + r.pb.ffn).toFixed(2)}`) : '-'), sort: (r) => (r.pb ? r.pb.attn + r.pb.ffn : 0) },
+    ], rows),
+    el('p', { class: 'muted small' }, 'push = attention + FFN push of the layer for each prompt\'s own decision (chosen − runner-up, in logits).'));
+}
 
 export async function timeline(id, params) {
   const s = session(id);

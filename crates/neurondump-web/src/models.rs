@@ -8,7 +8,7 @@ pub(super) async fn info(State(s): St) -> Json<Value> {
         "schema_version": neurondump_core::util::SCHEMA_VERSION,
         "output_dir": s.app.config.output_dir,
         "trace_architectures": neurondump_core::trace::supported_architectures(),
-        "job_kinds": ["inspect", "stats", "analyze", "slim", "trace", "ablate", "sweep", "journey", "generate", "compare", "bake", "diff"],
+        "job_kinds": ["inspect", "stats", "analyze", "slim", "trace", "ablate", "sweep", "journey", "generate", "compare", "bake", "diff", "causal", "heads", "similarity", "spectrum", "neuron", "glitch"],
     }))
 }
 
@@ -78,6 +78,23 @@ pub(super) async fn template(State(s): St, Path(id): Path<String>) -> ApiResult<
     let v = blocking(move || {
         let m = s.app.open_id(&id)?;
         Ok(serde_json::to_value(template_report(&m))?)
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+pub(super) struct MemoryQuery {
+    /// Extra context lengths, comma separated.
+    #[serde(default)]
+    pub(super) ctx: String,
+}
+
+pub(super) async fn memory(State(s): St, Path(id): Path<String>, Query(q): Query<MemoryQuery>) -> ApiResult<Json<Value>> {
+    let extra: Vec<u64> = q.ctx.split(',').filter_map(|c| c.trim().parse().ok()).filter(|c| *c <= 1 << 24).take(8).collect();
+    let v = blocking(move || {
+        let m = s.app.open_id(&id)?;
+        Ok(serde_json::to_value(neurondump_core::probe::memory_estimate(&m, &extra)?)?)
     })
     .await?;
     Ok(Json(v))
@@ -172,7 +189,6 @@ pub(super) async fn export(State(s): St, Path(id): Path<String>, Query(q): Query
     Ok(resp)
 }
 
-// --- graph / ablation ---------------------------------------------------------------
 
 pub(super) async fn tokenize(State(s): St, Path(id): Path<String>, Json(req): Json<neurondump_core::tokens::TokenizeRequest>) -> ApiResult<Json<Value>> {
     let v = blocking(move || {
@@ -223,5 +239,3 @@ pub(super) async fn vocab_texts(State(s): St, Path(id): Path<String>) -> ApiResu
     .await?;
     Ok(Json(v))
 }
-
-// --- edits ------------------------------------------------------------------------------

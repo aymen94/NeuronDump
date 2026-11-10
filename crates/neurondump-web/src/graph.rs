@@ -60,4 +60,3 @@ pub(super) async fn plan_from_ablation(State(s): St, Path(id): Path<String>, Jso
 }
 
 
-// --- token inspector / embedding map --------------------------------------------------

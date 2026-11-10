@@ -53,7 +53,6 @@ export async function createWebGLBackend( canvas, { antialias = true, powerPrefe
 	installShadows( ctx );
 	installEnvironment( ctx );
 	const { applyMaterialState, applyState, resetState, background, backgroundBuffer, backgroundProgram, bindCustomAttributes, bindGeometry, bindInstances, bindMaps, bindQuads, bindRange, depthSampler, distinct, draw, drawShadows, drawWireframe, effectProgram, ensureShadowTexture, finishPrograms, entries, environment, environmentFramebuffer, environments, frameBuffer, geometries, geometry, hdrTarget, info, instanced, instances, levelBuffers, materialBuffer, meshProgram, multiply, normalMatrix, objectBuffer, panoramaSampler, perInstance, program, programs, quadSource, release, renderTarget, renderTargets, scratchBuffer, screenSampler, setTextures, setUniforms, shaderProgram, shadowFramebuffer, startProgram, shadowObjectBuffer, stackFramebuffer, texture, textures, transmissionTarget, unbindArrays, upload, uploadBones, vsmFramebuffer, white } = ctx;
-	// ---------------------------------------------------------------- frame
 
 	gl.enable( gl.DEPTH_TEST );
 	gl.frontFace( gl.CCW );

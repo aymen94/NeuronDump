@@ -39,7 +39,6 @@ export { WebGLRenderer, WebGPURenderer } from './compat/renderer.js';
 export const MathUtils = W.MathUtils;
 export const Timer = W.Timer;
 
-// ---------------------------------------------------------------- time
 
 export class Clock {
 

@@ -89,6 +89,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/models/{id}/tensors", get(tensors))
         .route("/models/{id}/layers", get(layers))
         .route("/models/{id}/template", get(template))
+        .route("/models/{id}/memory", get(memory))
         .route("/models/{id}/tensors/{name}/stats", get(one_tensor_stats))
         .route("/models/{id}/graph", get(graph))
         .route("/models/{id}/nodes/{node}", get(graph_node))

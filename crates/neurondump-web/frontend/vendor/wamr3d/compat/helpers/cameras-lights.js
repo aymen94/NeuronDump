@@ -101,8 +101,6 @@ export class CameraHelper extends LineSegments {
 
 }
 
-// ---------------------------------------------------------------- lights
-
 /** A directional light: a square facing its target and a line to it. */
 export class DirectionalLightHelper extends Object3D {
 

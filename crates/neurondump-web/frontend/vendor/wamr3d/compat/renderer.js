@@ -9,8 +9,6 @@ import { FrameEnvironment, environmentReady, environmentWidth, shaderMaterials }
 import { Color, Matrix4 } from './math.js';
 import { backends, textureSources } from './textures.js';
 
-// ---------------------------------------------------------------- renderer
-
 let frameStamp = 0;
 const IDENTITY3 = new Float32Array( [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ] );
 const linear = ( { r, g, b } ) => ( { r, g, b, a: 1 } );

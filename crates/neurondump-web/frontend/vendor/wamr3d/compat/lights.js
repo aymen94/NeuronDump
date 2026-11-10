@@ -5,8 +5,6 @@ import { Color, Vector2 } from './math.js';
 import { Object3D } from './object3d.js';
 import { SphericalHarmonics3 } from './sh.js';
 
-// ---------------------------------------------------------------- lights
-
 export class Light extends Object3D {
 
 	constructor( color = 0xffffff, intensity = 1 ) {
@@ -82,8 +80,6 @@ export class DirectionalLight extends Light {
 }
 
 DirectionalLight.prototype.isDirectionalLight = true;
-
-// ---------------------------------------------------------------- shadows
 
 /** A light's shadow settings, with the three.js defaults. */
 export class LightShadow {

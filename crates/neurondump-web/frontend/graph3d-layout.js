@@ -1,7 +1,6 @@
 // Layouts of the graph view for the wamr3d renderer (graph3d.js): flat 2D, tower, city and
 // force-directed. Pure functions of the /graph JSON: positions and sizes, no drawing.
 
-// --- layout -----------------------------------------------------------------------------
 // Every layout places leaves (nodes with no visible children) as boxes; containers are drawn
 // as outlines around their descendants. Positions are box centers, sizes full extents.
 
@@ -275,11 +274,15 @@ export function containerBounds(view, s, pos, head = 0) {
     const k = s.kids.get(id);
     if (!k) return null;
     const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    let any = false;
     for (const c of k) {
       const cb = bounds(c);
       if (!cb) continue;
+      any = true;
       for (let i = 0; i < 3; i++) { b[i] = Math.min(b[i], cb[i]); b[i + 3] = Math.max(b[i + 3], cb[i + 3]); }
     }
+    // Every child hidden (isolation, slicing): no box.
+    if (!any) return null;
     const pad = 0.35;
     for (let i = 0; i < 3; i++) { b[i] -= pad; b[i + 3] += pad; }
     b[4] += head; // room for the label above the children (2D)
@@ -289,5 +292,3 @@ export function containerBounds(view, s, pos, head = 0) {
   s.roots.forEach(bounds);
   return out;
 }
-
-// --- renderer ---------------------------------------------------------------------------

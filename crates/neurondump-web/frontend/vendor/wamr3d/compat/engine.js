@@ -71,8 +71,6 @@ export function getWorld() {
 
 }
 
-// ---------------------------------------------------------------- transform properties
-
 // `object.position` and friends. The numbers are kept here, next to the object, so that
 // reading and writing them does not call into WebAssembly. Written parts are sent to
 // the engine in one batch (see `w()`); parts the engine changed are read back on demand.

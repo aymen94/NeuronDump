@@ -1,20 +1,24 @@
-// Shared wamr3d boot: the library (vendored in vendor/wamr3d), its orbit controls, and a
+// Shared wamr3d boot: the library (vendored in vendor/wamr3d), its camera controls, and a
 // renderer on wamr3d's automatic backend (WebGPU, else WebGL 2).
 
 import { store } from './ui.js';
 
 let lib = null;
-let Orbit = null;
+let Controls = {};
 
 export async function loadWamr() {
   if (!lib) {
     const l = await import('./vendor/wamr3d/compat.js');
     await l.init();
     // The controls build engine values at import time, so they load after init().
-    ({ OrbitControls: Orbit } = await import('./vendor/wamr3d/addons/controls/OrbitControls.js'));
+    const [orbit, trackball] = await Promise.all([
+      import('./vendor/wamr3d/addons/controls/OrbitControls.js'),
+      import('./vendor/wamr3d/addons/controls/TrackballControls.js'),
+    ]);
+    Controls = { OrbitControls: orbit.OrbitControls, MapControls: orbit.MapControls, TrackballControls: trackball.TrackballControls };
     lib = l;
   }
-  return { T: lib, OrbitControls: Orbit };
+  return { T: lib, ...Controls };
 }
 
 export const BACKEND_LABEL = { webgpu: 'WebGPU', 'webgpu-software': 'WebGPU (software)', webgl: 'WebGL 2' };
@@ -25,8 +29,13 @@ export function requestedBackend() {
   return q === 'webgl' || q === 'webgpu' ? q : 'auto';
 }
 
-export async function createRenderer(T) {
-  const renderer = new T.WebGPURenderer({ antialias: true, backend: requestedBackend() });
+export const BACKEND_CHOICES = { auto: 'Auto', webgpu: 'WebGPU', webgl: 'WebGL 2' };
+
+/** Remembers the backend picked in the UI (used by every 3D view from then on). */
+export function saveBackend(b) { store.set('nd-backend', b); }
+
+export async function createRenderer(T, backend = requestedBackend()) {
+  const renderer = new T.WebGPURenderer({ antialias: true, backend: BACKEND_CHOICES[backend] ? backend : 'auto' });
   await renderer.init();
   const name = renderer.backend?.name;
   return { renderer, backend: BACKEND_LABEL[name] || name || '?' };

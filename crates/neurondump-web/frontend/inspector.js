@@ -19,7 +19,7 @@ export function tokenChips(tokens, selected, onPick, cls) {
   }, vis(t.text))));
 }
 
-// --- tokens page ------------------------------------------------------------------------
+// tokens page
 
 export function tokens(id, params) {
   const s = session(id);

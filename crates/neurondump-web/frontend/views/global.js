@@ -29,7 +29,7 @@ export async function compare() {
     el('button', { onclick: run }, 'Compare'), out);
 }
 
-// --- Jobs -------------------------------------------------------------------------
+// Jobs
 
 export async function jobs() {
   const list = await api('/jobs');
@@ -54,7 +54,7 @@ export async function jobs() {
   return section;
 }
 
-// --- Search -----------------------------------------------------------------------
+// Search
 
 const HIT_GROUPS = [['model', 'Models', 0], ['token', 'Tokens', 1], ['tensor', 'Tensors', 2], ['metadata', 'Metadata keys', 3]];
 

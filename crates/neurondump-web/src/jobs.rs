@@ -41,7 +41,7 @@ pub(super) async fn create_job(State(s): St, Json(req): Json<JobRequest>) -> Api
             return Err(not_found("model `other`"));
         }
     }
-    if matches!(kind, JobKind::Trace | JobKind::Ablate | JobKind::Sweep | JobKind::Compare) {
+    if matches!(kind, JobKind::Trace | JobKind::Ablate | JobKind::Sweep | JobKind::Compare | JobKind::Similarity) {
         // Corpus files are paths on the server's disk; the web UI sends texts instead.
         if let Some(o) = params.as_object_mut() {
             o.remove("corpus_file");

@@ -45,7 +45,6 @@ export function stats(id, params) {
       : [el('h3', {}, 'Whole model'), el('button', { onclick: runFull }, 'Compute all statistics (job)'), full]);
 }
 
-// --- Analyze + slim -----------------------------------------------------------------
 
 export function analyze(id) {
   const corpus = el('textarea', { rows: 6, cols: 80, placeholder: 'Optional corpus text for vocabulary trimming' });
@@ -103,7 +102,7 @@ export function planView(id, plan) {
   return view;
 }
 
-// --- Trace ------------------------------------------------------------------------
+// Trace
 
 export async function trace(id) {
   const info = await api('/info');
@@ -133,5 +132,3 @@ export async function trace(id) {
     el('p', { class: 'muted' }, info.trace_architectures.length ? `Supported architectures: ${info.trace_architectures.join(', ')}` : 'This build has no trace support (build with --features trace).'),
     el('div', { class: 'row' }, prompt), corpus, el('div', {}, el('button', { onclick: run }, 'Trace')), out);
 }
-
-// --- Compare ----------------------------------------------------------------------
