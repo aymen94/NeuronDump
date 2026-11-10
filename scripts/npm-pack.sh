@@ -9,7 +9,6 @@
 #
 # Needs: curl, tar, unzip, node, npm.
 set -eu
-
 VERSION=${1:?usage: scripts/npm-pack.sh <version>   e.g. 0.1.4}
 VERSION=${VERSION#v}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,7 +25,15 @@ fetch() {
   case $target in *windows*) asset="neurondump-$target.zip" exe=neurondump.exe ;;
                   *) asset="neurondump-$target.tar.gz" exe=neurondump ;; esac
   echo "downloading $asset"
-  (cd "$TMP" && curl -fsSLO "$URL/$asset" && curl -fsSLO "$URL/$asset.sha256" && sha -c "$asset.sha256" >/dev/null)
+  (cd "$TMP" && curl -fsSLO "$URL/$asset" && curl -fsSLO "$URL/$asset.sha256")
+  # Compare the hashes directly: `sha256sum -c` rejects some valid lines (the Windows asset's
+  # binary-mode `hash *file`, CRLF endings) depending on the tool.
+  expected=$(tr -d '\r' < "$TMP/$asset.sha256" | awk 'NR == 1 { print tolower($1) }')
+  actual=$(sha "$TMP/$asset" | awk '{ print tolower($1) }')
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    echo "error: checksum mismatch for $asset (expected ${expected:-nothing}, got $actual)" >&2
+    exit 1
+  fi
   mkdir -p "$TMP/x/$target"
   case $asset in *.zip) unzip -q "$TMP/$asset" -d "$TMP/x/$target" ;;
                  *) tar -xzf "$TMP/$asset" -C "$TMP/x/$target" ;; esac
