@@ -21,6 +21,12 @@ pub(super) struct Model<'a> {
     pub(super) rope_dim: usize,
     pub(super) rope_base: f32,
     pub(super) rope_factors: Option<Vec<f32>>,
+    /// Linear RoPE scaling of the global layers (positions divided by it).
+    pub(super) rope_scale: f32,
+    /// RoPE base of the sliding-window layers, when it differs (Gemma 3: 10 000).
+    pub(super) rope_base_swa: Option<f32>,
+    /// Keys a sliding-window layer sees: the query and the `window - 1` before it.
+    pub(super) sliding_window: Option<usize>,
     pub(super) pooling: u64,
     /// Produces a pooled embedding (encoders, or decoders with a pooling type).
     pub(super) pooled: bool,
@@ -108,6 +114,15 @@ impl<'a> Model<'a> {
         let hc = k("attention.head_count");
         let hkv = k("attention.head_count_kv");
         let eps = k("attention.layer_norm_rms_epsilon").or(k("attention.layer_norm_epsilon")).and_then(|v| v.as_f64()).unwrap_or(1e-6);
+        // Sliding-window layers, as llama.cpp lays them out: Gemma 2 alternates local / global,
+        // Gemma 3 has five local layers for every global one (unless the file says otherwise).
+        let sliding_window = k("attention.sliding_window").and_then(|v| v.as_u64()).map(|v| v as usize).filter(|w| *w > 0);
+        let swa_pattern = k("attention.sliding_window_pattern").and_then(|v| v.as_u64()).map(|v| v as usize).or(match arch.as_str() {
+            "gemma2" => Some(2),
+            "gemma3" => Some(6),
+            _ => None,
+        });
+        let is_swa = |i: usize| sliding_window.is_some() && swa_pattern.is_some_and(|p| p > 0 && i % p < p - 1);
         let mut layers = Vec::with_capacity(n_layer);
         for i in 0..n_layer {
             check_cancel(p)?;
@@ -141,6 +156,7 @@ impl<'a> Model<'a> {
                 n_head,
                 n_kv,
                 head_dim,
+                swa: is_swa(i),
             });
         }
         let out_norm = norm(&w, "output_norm", eps, spec.layer_norm)?;
@@ -155,6 +171,9 @@ impl<'a> Model<'a> {
         let head_dim0 = layers.first().map_or(64, |l| l.head_dim);
         let rope_dim = k("rope.dimension_count").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(head_dim0);
         let rope_base = k("rope.freq_base").and_then(|v| v.as_f64()).unwrap_or(10000.0) as f32;
+        let rope_base_swa = k("rope.freq_base_swa").and_then(|v| v.as_f64()).map(|v| v as f32).or(if arch == "gemma3" { Some(10000.0) } else { None });
+        let linear = g.arch_key("rope.scaling.type").and_then(|v| v.as_str()) == Some("linear");
+        let rope_scale = if linear { k("rope.scaling.factor").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32 } else { 1.0 };
         let rope_factors = match g.tensor("rope_freqs.weight") {
             Some(t) => {
                 let mut v = Vec::new();
@@ -166,13 +185,36 @@ impl<'a> Model<'a> {
         let pooling_key = k("pooling_type").and_then(|v| v.as_u64());
         let pooled = spec.encoder || pooling_key.is_some_and(|p| p > 0);
         let pooling = pooling_key.unwrap_or(1);
-        Ok(Self { w, spec, layers, out_norm, lm_head, embd_norm, n_embd, rope_dim, rope_base, rope_factors, pooling, pooled, vocab, top_k })
+        Ok(Self {
+            w,
+            spec,
+            layers,
+            out_norm,
+            lm_head,
+            embd_norm,
+            n_embd,
+            rope_dim,
+            rope_base,
+            rope_factors,
+            rope_scale,
+            rope_base_swa,
+            sliding_window,
+            pooling,
+            pooled,
+            vocab,
+            top_k,
+        })
     }
 
-    /// cos/sin tables [seq, rope_dim/2].
+    /// cos/sin tables [seq, rope_dim/2] of the global layers.
     pub(super) fn rope_tables(&self, seq: usize) -> Result<(Tensor, Tensor)> {
+        self.rope_tables_with(seq, self.rope_base, self.rope_scale)
+    }
+
+    /// cos/sin tables for another base (sliding-window layers) and linear scale.
+    pub(super) fn rope_tables_with(&self, seq: usize, base: f32, scale: f32) -> Result<(Tensor, Tensor)> {
         let half = self.rope_dim / 2;
-        let mut inv: Vec<f32> = (0..half).map(|i| self.rope_base.powf(-(2.0 * i as f32) / self.rope_dim as f32)).collect();
+        let mut inv: Vec<f32> = (0..half).map(|i| base.powf(-(2.0 * i as f32) / self.rope_dim as f32) / scale.max(1e-6)).collect();
         if let Some(f) = &self.rope_factors {
             for (x, fac) in inv.iter_mut().zip(f) {
                 *x /= fac;

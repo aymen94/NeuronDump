@@ -37,12 +37,26 @@ impl<'a> Model<'a> {
             r.emb = row_of(&h, pos)?;
         }
         let (cos, sin) = self.rope_tables(seq)?;
+        let any_swa = self.layers.iter().any(|l| l.swa);
+        let rope_swa = match self.rope_base_swa {
+            Some(b) if any_swa => Some(self.rope_tables_with(seq, b, 1.0)?),
+            _ => None,
+        };
         let causal = !self.spec.encoder;
-        let mask = if causal && seq > 1 {
-            let m: Vec<f32> = (0..seq * seq).map(|i| if i % seq > i / seq { f32::NEG_INFINITY } else { 0.0 }).collect();
-            Some(Tensor::from_vec(m, (seq, seq), &self.w.dev)?)
-        } else {
-            None
+        // mask[q][k]: future keys, and on sliding-window layers keys `window` or more behind.
+        let build_mask = |window: Option<usize>| -> Result<Tensor> {
+            let m: Vec<f32> = (0..seq * seq)
+                .map(|i| {
+                    let (q, k) = (i / seq, i % seq);
+                    if k > q || window.is_some_and(|w| q - k >= w) { f32::NEG_INFINITY } else { 0.0 }
+                })
+                .collect();
+            Ok(Tensor::from_vec(m, (seq, seq), &self.w.dev)?)
+        };
+        let mask = if causal && seq > 1 { Some(build_mask(None)?) } else { None };
+        let mask_swa = match self.sliding_window {
+            Some(w) if causal && any_swa && seq > w => Some(build_mask(Some(w))?),
+            _ => None,
         };
 
         let mut traces = Vec::new();
@@ -118,8 +132,12 @@ impl<'a> Model<'a> {
                     if let Some(n) = &l.k_norm {
                         k = n.forward(&k)?;
                     }
-                    let q = self.rope(&q, &cos, &sin)?.transpose(0, 1)?.contiguous()?;
-                    let k = self.rope(&k, &cos, &sin)?.transpose(0, 1)?.contiguous()?;
+                    let (lc, ls) = match (&rope_swa, l.swa) {
+                        (Some((c, s)), true) => (c, s),
+                        _ => (&cos, &sin),
+                    };
+                    let q = self.rope(&q, lc, ls)?.transpose(0, 1)?.contiguous()?;
+                    let k = self.rope(&k, lc, ls)?.transpose(0, 1)?.contiguous()?;
                     let v = v.transpose(0, 1)?.contiguous()?;
                     let group = l.n_head / l.n_kv.max(1);
                     let (k, v) = if group > 1 {
@@ -131,7 +149,7 @@ impl<'a> Model<'a> {
                         (k, v)
                     };
                     let mut scores = (q.matmul(&k.t()?.contiguous()?)? / (l.head_dim as f64).sqrt())?;
-                    if let Some(m) = &mask {
+                    if let Some(m) = if l.swa { mask_swa.as_ref().or(mask.as_ref()) } else { mask.as_ref() } {
                         scores = scores.broadcast_add(m)?;
                     }
                     let probs = softmax_last(&scores)?;

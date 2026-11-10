@@ -160,6 +160,8 @@ pub(super) struct Layer {
     pub(super) n_head: usize,
     pub(super) n_kv: usize,
     pub(super) head_dim: usize,
+    /// Sliding-window (local) attention layer: the window mask and the local RoPE base.
+    pub(super) swa: bool,
 }
 
 pub(super) fn norm(w: &Weights, base: &str, eps: f64, layer: bool) -> Result<Option<Norm>> {

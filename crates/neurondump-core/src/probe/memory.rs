@@ -30,6 +30,8 @@ pub struct MemoryEstimate {
     /// Context length the model was trained for.
     pub train_context: Option<u64>,
     pub sliding_window: Option<u64>,
+    /// Layers that only cache the last `sliding_window` tokens.
+    pub swa_layers: u64,
     pub rows: Vec<MemoryRow>,
     pub notes: Vec<String>,
 }
@@ -43,8 +45,19 @@ pub fn memory_estimate(m: &ModelHandle, extra: &[u64]) -> Result<MemoryEstimate>
     let hc = k("attention.head_count");
     let hkv = k("attention.head_count_kv");
     let mut notes = Vec::new();
+    // Sliding-window layers as llama.cpp lays them out: Gemma 2 alternates local / global,
+    // Gemma 3 has five local layers per global one, unless the file gives the pattern.
+    let sliding_window = k("attention.sliding_window").and_then(|v| v.as_u64()).filter(|w| *w > 0);
+    let pattern = k("attention.sliding_window_pattern").and_then(|v| v.as_u64()).or(match m.architecture() {
+        "gemma2" => Some(2),
+        "gemma3" => Some(6),
+        _ => None,
+    });
+    let is_swa = |i: usize| sliding_window.is_some() && pattern.is_some_and(|p| p > 0 && (i as u64) % p < p - 1);
     let mut values_per_token = 0u64;
+    let mut values_swa = 0u64;
     let mut kv_layers = 0u64;
+    let mut swa_layers = 0u64;
     for i in 0..layers as usize {
         let n_head = crate::arch::per_layer(hc, i).unwrap_or(0);
         let n_kv = crate::arch::per_layer(hkv, i).unwrap_or(n_head);
@@ -56,15 +69,22 @@ pub fn memory_estimate(m: &ModelHandle, extra: &[u64]) -> Result<MemoryEstimate>
         let vd = k("attention.value_length").and_then(|v| v.as_u64()).unwrap_or(head_dim);
         values_per_token += n_kv * (kd + vd);
         kv_layers += 1;
+        if is_swa(i) {
+            values_swa += n_kv * (kd + vd);
+            swa_layers += 1;
+        }
     }
     if kv_layers == 0 {
         notes.push("no attention heads found: recurrent / state-space layers keep a fixed-size state instead of a KV cache".into());
     } else if kv_layers < layers {
         notes.push(format!("{} of {layers} layers have no KV cache (recurrent or state-space layers)", layers - kv_layers));
     }
-    let sliding_window = k("attention.sliding_window").and_then(|v| v.as_u64());
-    if let Some(w) = sliding_window {
-        notes.push(format!("sliding-window layers ({w} tokens) cache less than shown; the figures assume every attention layer caches the whole context"));
+    match sliding_window {
+        Some(w) if swa_layers > 0 => notes.push(format!(
+            "{swa_layers} of {kv_layers} attention layers use a {w}-token sliding window and cache at most {w} tokens (counted); llama.cpp's --swa-full caches the whole context there"
+        )),
+        Some(w) => notes.push(format!("the file declares a {w}-token sliding window but not which layers use it: every layer is counted at full context")),
+        None => {}
     }
     let train_context = k("context_length").and_then(|v| v.as_u64());
     let weights_bytes: u64 = g.tensors.iter().map(|t| t.n_bytes).sum();
@@ -77,7 +97,12 @@ pub fn memory_estimate(m: &ModelHandle, extra: &[u64]) -> Result<MemoryEstimate>
     let rows = ctxs
         .into_iter()
         .map(|c| {
-            let kv: Vec<u64> = kv_bytes_per_token.iter().map(|b| (b * c as f64) as u64).collect();
+            // Global layers cache every token; sliding-window layers at most the window.
+            let window = sliding_window.unwrap_or(c).min(c);
+            let kv: Vec<u64> = KV_TYPES
+                .iter()
+                .map(|(_, b)| (b * ((values_per_token - values_swa) as f64 * c as f64 + values_swa as f64 * window as f64)) as u64)
+                .collect();
             MemoryRow { context: c, total_bytes: kv.iter().map(|x| x + weights_bytes).collect(), kv_bytes: kv }
         })
         .collect();
@@ -92,6 +117,7 @@ pub fn memory_estimate(m: &ModelHandle, extra: &[u64]) -> Result<MemoryEstimate>
         kv_bytes_per_token,
         train_context,
         sliding_window,
+        swa_layers,
         rows,
         notes,
     })
