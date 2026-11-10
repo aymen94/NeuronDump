@@ -31,6 +31,7 @@ nav:
       - What's inside real models: models.md
       - What fine-tunes change: diff-research.md
       - Gemma 4, Gemma, Gemma 2 and Phi-3: new-models.md
+      - Inside Gemma 3 1B: gemma3-research.md
 
 theme:
   name: material

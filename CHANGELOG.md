@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Gemma 3 forward pass:** sliding-window layers get their own RoPE base (`rope.freq_base_swa`,
+  10,000) and the window mask, in llama.cpp's layout (five local layers per global one; Gemma 2
+  alternates). gemma3:1b now matches Ollama (first tokens 0.186 / 0.449 / 0.887 against 0.163 /
+  0.452 / 0.877; before: 0.103 / 0.223 / 0.648). Linear RoPE scaling (`rope.scaling.factor`) is applied
+  to the global layers.
+- **Memory estimate:** sliding-window layers are counted at most at their window (gemma3:1b at 32K:
+  139 MiB of f16 KV cache instead of 832 MiB).
+- **Research:** [Inside Gemma 3 1B](docs/gemma3-research.md), every probe on one model.
+
 ## 0.1.5
 
 - **Probes** ([docs/probes.md](docs/probes.md)), each a CLI command, a job and a section of the new

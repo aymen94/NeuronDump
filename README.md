@@ -211,6 +211,7 @@ neurondump diff huihui_ai/qwen2.5-abliterate:0.5b qwen2.5:0.5b --top 10
 | [Trace](docs/trace.md) | running a model and looking at each layer |
 | [Graph and ablation](docs/graph-and-ablation.md) | the 3D / 2D graph: look inside layers, inspect, search, cut, direct and simulated impact |
 | [What's inside real models](docs/models.md) | Qwen3 8B vs DeepSeek-R1, and Qwen 3.8 |
+| [Inside Gemma 3 1B](docs/gemma3-research.md) | every probe on one model: where a fact lives, induction heads in the global layers, French neurons |
 | [Building](docs/building.md) | build options and Windows notes |
 | [Manual test plan](https://github.com/aymen94/NeuronDump/blob/main/TEST.md) | step-by-step checks |
 

@@ -193,6 +193,8 @@ neurondump memory llama3.1:8b --ctx 65536
 │ 131072 (trained) ┆ 16.00 GiB ┆ 8.50 GiB   ┆ 4.50 GiB   ┆ 20.58 GiB ┆ 13.08 GiB ┆ 9.08 GiB │
 ```
 
-Runtimes add compute buffers on top. Sliding-window layers (Gemma 2 / 3) cache less than shown;
-recurrent and state-space layers keep a fixed-size state instead of a KV cache. The notes under the
-table say when either applies.
+Runtimes add compute buffers on top. Sliding-window layers (Gemma 2 / 3, in llama.cpp's layout)
+are counted at most at their window, so gemma3:1b needs 139 MiB of f16 cache at 32K instead of
+832 MiB; llama.cpp's `--swa-full` caches the whole context there. Recurrent and state-space layers
+keep a fixed-size state instead of a KV cache. The notes under the table say when either applies.
+See [Inside Gemma 3 1B](gemma3-research.md) for a whole model through every probe.
