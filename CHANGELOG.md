@@ -1,7 +1,5 @@
 # Changelog
 
-Features by development phase.
-
 ## 0.1.5
 
 - **Probes** ([docs/probes.md](docs/probes.md)), each a CLI command, a job and a section of the new
