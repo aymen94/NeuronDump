@@ -29,6 +29,7 @@ pub mod inspect;
 #[cfg(feature = "native")]
 pub mod jobs;
 pub mod model;
+pub mod probe;
 pub mod search;
 #[cfg(feature = "native")]
 pub mod slim;

@@ -119,6 +119,58 @@ pub struct EditView {
     pub snapshots: Vec<String>,
 }
 
+/// Parameters of a `causal` job: the clean prompt, a corrupted one, the measured token.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CausalParams {
+    #[serde(flatten)]
+    pub prompt: PromptParams,
+    /// The corrupted prompt (templated like the clean one).
+    pub corrupt: String,
+    /// Token text whose probability is measured (its first token); default: the clean top-1.
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub component: crate::trace::CausalComponent,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+    #[serde(default)]
+    pub edits: Option<Vec<Edit>>,
+    #[serde(default)]
+    pub baseline: bool,
+}
+
+/// Parameters of a `heads` job.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct HeadsParams {
+    #[serde(default)]
+    pub samples: Option<usize>,
+    #[serde(default)]
+    pub length: Option<usize>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub edits: Option<Vec<Edit>>,
+    #[serde(default)]
+    pub baseline: bool,
+}
+
+/// Parameters of a `similarity` job.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SimilarityParams {
+    #[serde(default)]
+    pub corpus: Vec<String>,
+    #[serde(default)]
+    pub corpus_file: Option<PathBuf>,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+    #[serde(default)]
+    pub max_positions: Option<usize>,
+    #[serde(default)]
+    pub edits: Option<Vec<Edit>>,
+    #[serde(default)]
+    pub baseline: bool,
+}
+
 /// Parameters of an `ablate` job.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct AblateParams {

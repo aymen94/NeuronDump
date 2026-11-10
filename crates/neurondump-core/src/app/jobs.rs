@@ -8,7 +8,7 @@ impl App {
     pub fn run(&self, kind: JobKind, model: &str, params: Value, p: &dyn Progress) -> Result<(Value, bool)> {
         let m = self.open(model)?;
         let mut params = if params.is_null() { Value::Object(Default::default()) } else { params };
-        if matches!(kind, JobKind::Journey | JobKind::Generate | JobKind::Compare | JobKind::Bake) {
+        if matches!(kind, JobKind::Journey | JobKind::Generate | JobKind::Compare | JobKind::Bake | JobKind::Causal | JobKind::Heads | JobKind::Similarity) {
             // Jobs see the edit stack as it was when they started (and are cached on it).
             if let Some(o) = params.as_object_mut() {
                 if o.get("edits").is_none_or(Value::is_null) {
@@ -44,6 +44,12 @@ impl App {
                 | JobKind::Generate
                 | JobKind::Compare
                 | JobKind::Diff
+                | JobKind::Causal
+                | JobKind::Heads
+                | JobKind::Similarity
+                | JobKind::Spectrum
+                | JobKind::Neuron
+                | JobKind::Glitch
         );
         if cacheable {
             if let Some(v) = self.cache_get(&m, kind.as_str(), &params) {
@@ -222,6 +228,70 @@ impl App {
                 let g = self.graph(&m).ok();
                 serde_json::to_value(crate::diff::diff(&m, &b, g.as_deref(), &o, p)?)?
             }
+            JobKind::Causal => {
+                let o: CausalParams = serde_json::from_value(params.clone()).context("causal params (need prompt + corrupt)")?;
+                if o.corrupt.trim().is_empty() || o.prompt.prompt.trim().is_empty() {
+                    anyhow::bail!("causal tracing needs a clean prompt and a corrupted prompt");
+                }
+                let c = self.compile_for(&m, o.edits.as_deref().unwrap_or_default(), o.baseline)?;
+                let clean = self.prompt_text(&m, &o.prompt, &c)?;
+                let corrupt = self.prompt_text(&m, &PromptParams { prompt: o.corrupt.clone(), ..o.prompt.clone() }, &c)?;
+                let target = match o.target.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                    Some(t) => {
+                        let v = self.vocab(&m)?;
+                        let enc = crate::tokenizer::Encoder::new(&v)?;
+                        Some(*enc.encode(t, false, None).ids.first().with_context(|| format!("target {t:?} produced no token"))?)
+                    }
+                    None => None,
+                };
+                let req = crate::trace::CausalRequest { clean, corrupt, target, component: o.component, max_tokens: o.max_tokens.unwrap_or(64), ablation: c.intervention.clone() };
+                serde_json::to_value(crate::trace::causal(&m, &req, p)?)?
+            }
+            JobKind::Heads => {
+                let o: HeadsParams = serde_json::from_value(params.clone()).context("heads params")?;
+                let c = self.compile_for(&m, o.edits.as_deref().unwrap_or_default(), o.baseline)?;
+                let d = crate::trace::HeadRolesRequest::default();
+                let req = crate::trace::HeadRolesRequest {
+                    samples: o.samples.unwrap_or(d.samples).clamp(1, 32),
+                    length: o.length.unwrap_or(d.length).clamp(4, 256),
+                    seed: o.seed.unwrap_or(d.seed),
+                    ablation: c.intervention.clone(),
+                };
+                serde_json::to_value(crate::trace::head_roles(&m, &req, p)?)?
+            }
+            JobKind::Similarity => {
+                let o: SimilarityParams = serde_json::from_value(params.clone()).context("similarity params")?;
+                let c = self.compile_for(&m, o.edits.as_deref().unwrap_or_default(), o.baseline)?;
+                let mut corpus = o.corpus.clone();
+                if let Some(f) = &o.corpus_file {
+                    corpus.extend(crate::trace::read_corpus(f)?);
+                }
+                if corpus.is_empty() {
+                    anyhow::bail!("layer similarity needs a corpus (texts separated by blank lines)");
+                }
+                let d = crate::trace::SimilarityRequest::default();
+                let req = crate::trace::SimilarityRequest {
+                    corpus,
+                    max_tokens: o.max_tokens.unwrap_or(d.max_tokens).clamp(2, 1024),
+                    max_positions: o.max_positions.unwrap_or(d.max_positions).clamp(8, 2048),
+                    ablation: c.intervention.clone(),
+                };
+                serde_json::to_value(crate::trace::similarity(&m, &req, p)?)?
+            }
+            JobKind::Spectrum => {
+                let o: crate::probe::SpectrumOptions = serde_json::from_value(params.clone()).context("spectrum params")?;
+                serde_json::to_value(crate::probe::spectrum(&m, &o, p)?)?
+            }
+            JobKind::Neuron => {
+                let o: crate::probe::NeuronOptions = serde_json::from_value(params.clone()).context("neuron params (need layer + neuron)")?;
+                let v = self.vocab(&m)?;
+                serde_json::to_value(crate::probe::neuron(&m, &v, &o, p)?)?
+            }
+            JobKind::Glitch => {
+                let o: crate::probe::GlitchOptions = serde_json::from_value(params.clone()).context("glitch params")?;
+                let v = self.vocab(&m)?;
+                serde_json::to_value(crate::probe::glitch_tokens(&m, &v, &o, p)?)?
+            }
         };
 
         if matches!(kind, JobKind::Stats | JobKind::Inspect) {
@@ -273,6 +343,5 @@ impl App {
         Ok(id)
     }
 
-    // --- edits ---------------------------------------------------------------------------
 
 }

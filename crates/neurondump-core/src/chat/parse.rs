@@ -264,5 +264,3 @@ pub(super) fn parse(src: &str) -> Result<Vec<Node>> {
     }
     Ok(nodes)
 }
-
-// --- evaluation -------------------------------------------------------------------------

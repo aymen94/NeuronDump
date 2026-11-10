@@ -108,5 +108,3 @@ pub fn render_template(template: &str, system: Option<&str>, prompt: &str) -> Re
     ev.exec(&nodes, &root, &mut out)?;
     Ok(out)
 }
-
-// --- values -----------------------------------------------------------------------------

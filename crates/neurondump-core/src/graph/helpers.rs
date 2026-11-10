@@ -136,5 +136,3 @@ pub(super) fn parse_layer_prefix(s: &str) -> Option<(u32, &str)> {
     };
     Some((n.parse().ok()?, tail))
 }
-
-// --- build -----------------------------------------------------------------------------

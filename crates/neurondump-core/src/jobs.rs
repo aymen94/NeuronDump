@@ -24,6 +24,12 @@ pub enum JobKind {
     Compare,
     Bake,
     Diff,
+    Causal,
+    Heads,
+    Similarity,
+    Spectrum,
+    Neuron,
+    Glitch,
 }
 
 impl JobKind {
@@ -41,6 +47,12 @@ impl JobKind {
             JobKind::Compare => "compare",
             JobKind::Bake => "bake",
             JobKind::Diff => "diff",
+            JobKind::Causal => "causal",
+            JobKind::Heads => "heads",
+            JobKind::Similarity => "similarity",
+            JobKind::Spectrum => "spectrum",
+            JobKind::Neuron => "neuron",
+            JobKind::Glitch => "glitch",
         }
     }
 
@@ -58,6 +70,12 @@ impl JobKind {
             "compare" => JobKind::Compare,
             "bake" => JobKind::Bake,
             "diff" => JobKind::Diff,
+            "causal" => JobKind::Causal,
+            "heads" => JobKind::Heads,
+            "similarity" => JobKind::Similarity,
+            "spectrum" => JobKind::Spectrum,
+            "neuron" => JobKind::Neuron,
+            "glitch" => JobKind::Glitch,
             _ => return None,
         })
     }

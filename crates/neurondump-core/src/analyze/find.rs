@@ -21,7 +21,7 @@ pub fn analyze(
         notes.push("no token_embd/output tensor with vocabulary rows; vocabulary trimming saves metadata only".into());
     }
 
-    // --- Vocabulary from corpus ------------------------------------------------------
+    //  Vocabulary from corpus
     p.set(5.0, "vocabulary");
     if let Some(vocab) = &vocab {
         let mut corpus = String::new();
@@ -77,7 +77,7 @@ pub fn analyze(
             }
         }
 
-        // --- Reserved / unused tokens -------------------------------------------------
+        // Reserved / unused tokens
         let protected: BTreeSet<u32> = crate::tokenizer::special_token_keys(g).iter().filter_map(|k| g.get_u64(k)).map(|v| v as u32).collect();
         let reserved: Vec<u32> =
             vocab.tokens.iter().filter(|t| t.class == TokenClass::Reserved && !protected.contains(&t.id)).map(|t| t.id).collect();
@@ -97,7 +97,7 @@ pub fn analyze(
         }
     }
 
-    // --- Tied embeddings --------------------------------------------------------------
+    // Tied embeddings 
     p.set(15.0, "embeddings");
     match (g.tensor("token_embd.weight"), g.tensor("output.weight")) {
         (Some(_), None) => notes.push("embeddings are already tied (no separate output.weight)".into()),
@@ -129,7 +129,7 @@ pub fn analyze(
         _ => {}
     }
 
-    // --- Static weight heuristics ------------------------------------------------------
+    // Static weight heuristics
     p.set(25.0, "weight heuristics");
     let experimental_reason =
         "structured pruning changes per-layer shapes; no architecture is confirmed to load non-uniform shapes in llama.cpp, so slim refuses it".to_string();
@@ -222,7 +222,7 @@ pub fn analyze(
         notes.push("no weight statistics available: run `inspect --stats` (or the stats job) for head/neuron/expert heuristics".into());
     }
 
-    // --- Layer redundancy ----------------------------------------------------------------
+    // Layer redundancy
     p.set(35.0, "layer redundancy");
     let n_layers = arch.layers.len();
     let layer_bytes = |i: u32| arch.layers.iter().find(|l| l.index == i).map_or(0, |l| l.bytes);
@@ -280,7 +280,7 @@ pub fn analyze(
         notes.push("layer similarity not computed".into());
     }
 
-    // --- Quantization headroom -----------------------------------------------------------
+    // Quantization headroom
     p.set(88.0, "quantization headroom");
     let mut quant = Vec::new();
     let mut saved = 0;
@@ -315,7 +315,6 @@ pub fn analyze(
         ));
     }
 
-    // --- Unused extras ---------------------------------------------------------------------
     if let Some(pp) = &m.entry.projector {
         let size = std::fs::metadata(pp).map(|m| m.len()).unwrap_or(0);
         c.push(Candidate {

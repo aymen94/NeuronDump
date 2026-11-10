@@ -14,7 +14,9 @@ mod report;
 mod intervention;
 mod journey;
 mod simulate;
+mod probes;
 pub use report::*;
+pub use probes::*;
 pub use intervention::*;
 pub use journey::*;
 pub use simulate::*;
@@ -34,6 +36,15 @@ pub trait TraceBackend: Send + Sync {
     }
     fn generate(&self, _model: &ModelHandle, _req: &GenerateRequest, _progress: &dyn Progress) -> Result<GenerateReport> {
         bail!("this trace backend cannot generate")
+    }
+    fn causal(&self, _model: &ModelHandle, _req: &CausalRequest, _progress: &dyn Progress) -> Result<CausalReport> {
+        bail!("this trace backend cannot run causal tracing")
+    }
+    fn head_roles(&self, _model: &ModelHandle, _req: &HeadRolesRequest, _progress: &dyn Progress) -> Result<HeadRolesReport> {
+        bail!("this trace backend cannot score attention heads")
+    }
+    fn similarity(&self, _model: &ModelHandle, _req: &SimilarityRequest, _progress: &dyn Progress) -> Result<SimilarityReport> {
+        bail!("this trace backend cannot compare layers")
     }
 }
 
@@ -102,4 +113,19 @@ pub fn journey(m: &ModelHandle, req: &JourneyRequest, p: &dyn Progress) -> Resul
 /// Generates tokens with a per-step timeline (feature `trace`, supported architectures only).
 pub fn generate(m: &ModelHandle, req: &GenerateRequest, p: &dyn Progress) -> Result<GenerateReport> {
     require_backend(m)?.generate(m, req, p)
+}
+
+/// Causal tracing over layers × positions (feature `trace`, supported architectures only).
+pub fn causal(m: &ModelHandle, req: &CausalRequest, p: &dyn Progress) -> Result<CausalReport> {
+    require_backend(m)?.causal(m, req, p)
+}
+
+/// Attention head roles from synthetic repeated sequences (feature `trace`).
+pub fn head_roles(m: &ModelHandle, req: &HeadRolesRequest, p: &dyn Progress) -> Result<HeadRolesReport> {
+    require_backend(m)?.head_roles(m, req, p)
+}
+
+/// Layer-to-layer representation similarity on a corpus (feature `trace`).
+pub fn similarity(m: &ModelHandle, req: &SimilarityRequest, p: &dyn Progress) -> Result<SimilarityReport> {
+    require_backend(m)?.similarity(m, req, p)
 }

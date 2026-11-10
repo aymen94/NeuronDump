@@ -58,4 +58,3 @@ pub fn sweep(m: &ModelHandle, graph: &ModelGraph, mut req: SweepRequest, p: &dyn
     b.sweep(m, &req, p)
 }
 
-// --- plans ---------------------------------------------------------------------------------

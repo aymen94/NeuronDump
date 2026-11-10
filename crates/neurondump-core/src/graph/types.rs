@@ -161,5 +161,3 @@ pub struct NodeDetail {
     pub incoming: Vec<Edge>,
     pub outgoing: Vec<Edge>,
 }
-
-// --- helpers -------------------------------------------------------------------------

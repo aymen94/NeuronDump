@@ -195,5 +195,3 @@ pub fn compile(graph: &ModelGraph, vocab: Option<&Vocab>, edits: &[Edit]) -> Res
     c.touched.retain(|t| seen.insert(t.clone()));
     Ok(c)
 }
-
-// --- bake ------------------------------------------------------------------------------

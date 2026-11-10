@@ -36,7 +36,7 @@ pub fn static_impact(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>,
         reasons.push("nothing selected".into());
     }
 
-    // --- sizes -----------------------------------------------------------------------
+    // sizes 
     let mut params_removed = 0u64;
     let mut params_zeroed = 0u64;
     let mut bytes_removed = 0u64;
@@ -65,7 +65,7 @@ pub fn static_impact(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>,
         ));
     }
 
-    // --- layers ----------------------------------------------------------------------
+    // layers 
     let n_layers = graph.n_layers;
     let removed: BTreeSet<u32> = ablation.skip_layers.iter().copied().collect();
     let mut renumber = Vec::new();
@@ -104,7 +104,7 @@ pub fn static_impact(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>,
         }
     }
 
-    // --- dependencies ------------------------------------------------------------------
+    // dependencies 
     let cut_ids: HashSet<&str> = targets.iter().map(|t| t.id.as_str()).collect();
     let cut_under = |x: &str| cut_ids.contains(x) || graph.ancestors(x).iter().any(|a| cut_ids.contains(a.as_str()));
     if graph.tied_embeddings && (cut_under("t.token_embd.weight") || cut_under("output.head")) {
@@ -137,7 +137,7 @@ pub fn static_impact(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>,
         dependencies.push("without the tokenizer no text can be encoded".into());
     }
 
-    // --- graph connectivity -------------------------------------------------------------
+    // graph connectivity 
     let mut fwd: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut bwd: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for e in graph.edges.iter().filter(|e| e.kind == EdgeKind::Dataflow) {
@@ -203,7 +203,7 @@ pub fn static_impact(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>,
         reasons.push(format!("{} node(s) are cut off from the input or the output", disconnected.len()));
     }
 
-    // --- file operations / legality -----------------------------------------------------
+    // file operations / legality
     for t in &targets {
         match (t.mode, t.id.as_str()) {
             (CutMode::Remove, "projector") => file_ops.push("drop the vision projector from the Modelfile".into()),
@@ -226,7 +226,7 @@ pub fn static_impact(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>,
         llama_ok = false;
     }
 
-    // --- simulation support -----------------------------------------------------------------
+    // simulation support
     let mut sim_notes = Vec::new();
     let backend_ok = crate::trace::require_backend(m);
     let mut sim_supported = backend_ok.is_ok();

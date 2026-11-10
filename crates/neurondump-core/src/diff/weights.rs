@@ -122,7 +122,7 @@ pub fn diff(a: &ModelHandle, b: &ModelHandle, graph_a: Option<&ModelGraph>, o: &
     let only_in_b: Vec<String> =
         gb.tensors.iter().filter(|t| !by_a.contains_key(&canonical_name(&t.name, &rb))).map(|t| t.name.clone()).collect();
 
-    // --- weights ---------------------------------------------------------------------------
+    //  weights
     let total_rows: u64 = pairs.iter().map(|(t, _)| t.n_rows()).sum::<u64>().max(1);
     let done = AtomicU64::new(0);
     let last = Mutex::new(0f32);

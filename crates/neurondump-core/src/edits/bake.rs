@@ -70,7 +70,7 @@ pub fn bake(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>, edits: &
         }
     }
 
-    // --- weight operations per tensor ------------------------------------------------------
+    // weight operations per tensor
     let mut ops: BTreeMap<String, Vec<WOp>> = BTreeMap::new();
     let mut add = |name: String, op: WOp| {
         if g.tensor(&name).is_some() {
@@ -144,7 +144,7 @@ pub fn bake(m: &ModelHandle, graph: &ModelGraph, vocab: Option<&Vocab>, edits: &
         notes.push("banned tokens are not baked: use `slim` with a vocabulary cut to remove tokens".into());
     }
 
-    // --- write ------------------------------------------------------------------------------
+    // write
     let mut w = GgufWriter::new();
     w.metadata = g.metadata.clone();
     w.metadata.insert("general.edited_by".into(), Value::String(format!("neurondump {}", env!("CARGO_PKG_VERSION"))));

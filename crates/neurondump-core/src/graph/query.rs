@@ -108,7 +108,7 @@ impl ModelGraph {
         self.nodes.keys().cloned().collect()
     }
 
-    // --- views -------------------------------------------------------------------------
+    // views
 
     pub(super) fn rank(&self, n: &Node) -> u8 {
         match n.kind {

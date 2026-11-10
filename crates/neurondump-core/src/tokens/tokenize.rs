@@ -120,5 +120,3 @@ pub fn tokenize(m: &ModelHandle, vocab: &Vocab, req: &TokenizeRequest, banned: &
         elapsed_ms: started.elapsed().as_millis() as u64,
     })
 }
-
-// --- embedding map ------------------------------------------------------------------------

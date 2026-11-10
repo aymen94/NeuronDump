@@ -37,7 +37,7 @@ impl ModelGraph {
             "the output norm and head produce the predictions",
         );
 
-        // --- top-level tensors ---------------------------------------------------------
+        // top-level tensors
         let roles: Vec<_> = g.tensors.iter().map(|t| parse_tensor_name(&t.name)).collect();
         let mut has_mtp_section = false;
         let mut has_vision_section = false;
@@ -116,7 +116,6 @@ impl ModelGraph {
             nodes.insert(sink_id.into(), n);
         }
 
-        // --- layers --------------------------------------------------------------------
         let mut dims: BTreeMap<u32, LayerDims> = BTreeMap::new();
         let emb = arch.hyperparams.embedding_length.unwrap_or(0);
         let mut layer_tensors: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
@@ -257,7 +256,7 @@ impl ModelGraph {
             }
         }
 
-        // --- dataflow ------------------------------------------------------------------
+        // dataflow
         let flow = |edges: &mut Vec<Edge>, a: &str, b: &str, label: Option<&str>| {
             edges.push(Edge { from: a.into(), to: b.into(), kind: EdgeKind::Dataflow, label: label.map(String::from) });
         };
@@ -355,7 +354,7 @@ impl ModelGraph {
             edges.push(Edge { from: "vision".into(), to: "input".into(), kind: EdgeKind::Uses, label: Some("image embeddings".into()) });
         }
 
-        // --- tokenizer, template, projector ----------------------------------------------
+        // tokenizer, template, projector
         if let Some(v) = vocab {
             section(&mut nodes, "tokenizer", &format!("Tokenizer ({})", v.model_name), Removable::BreaksModel, "turns text into token ids");
             if let Some(n) = nodes.get_mut("tokenizer") {
@@ -429,7 +428,7 @@ impl ModelGraph {
             edges.push(Edge { from: "projector".into(), to: "input".into(), kind: EdgeKind::Uses, label: Some("image embeddings".into()) });
         }
 
-        // --- aggregate sizes for sections ------------------------------------------------
+        // aggregate sizes for sections
         for sec in ["input", "output", "body", "mtp", "vision", "extra"] {
             let (p, b, q) = nodes.values().filter(|n| n.kind == NodeKind::Tensor).filter(|n| ancestors_of(&nodes, &n.id).iter().any(|a| a == sec)).fold(
                 (0u64, 0u64, BTreeSet::new()),

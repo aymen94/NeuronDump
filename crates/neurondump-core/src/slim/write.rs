@@ -79,7 +79,7 @@ pub fn slim(m: &ModelHandle, opts: &SlimOptions, output_dir: &Path, p: &dyn Prog
         applied.push(c.id.clone());
     }
 
-    // --- Vocabulary remap ------------------------------------------------------------------
+    // Vocabulary remap 
     p.set(5.0, "planning");
     let mut metadata = g.metadata.clone();
     let vocab = Vocab::from_gguf(g).ok();
@@ -136,7 +136,6 @@ pub fn slim(m: &ModelHandle, opts: &SlimOptions, output_dir: &Path, p: &dyn Prog
         keep_ids = Some(keep_v);
     }
 
-    // --- Layer removal ----------------------------------------------------------------------
     let block_count = g.arch_key("block_count").and_then(|v| v.as_u64()).unwrap_or(0);
     let mut layer_map: BTreeMap<u32, u32> = BTreeMap::new();
     if !remove_layers.is_empty() {
@@ -193,7 +192,6 @@ pub fn slim(m: &ModelHandle, opts: &SlimOptions, output_dir: &Path, p: &dyn Prog
         );
     }
 
-    // --- Tensors -----------------------------------------------------------------------------
     let vt: HashSet<String> = vocab_tensors(g, n_vocab as u64).into_iter().map(|t| t.name.clone()).collect();
     let mut w = GgufWriter::new();
     w.metadata = metadata;
