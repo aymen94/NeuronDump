@@ -134,7 +134,7 @@ If you use NeuronDump in academic work, please cite the repository:
   email   = {aymenadvance@gmail.com}
   title   = {NeuronDump: inspecting, analyzing and slimming GGUF language models},
   year    = {2026},
-  version = {0.1.4},
+  version = {0.1.5},
   url     = {https://github.com/aymen94/NeuronDump},
   license = {MIT}
 }

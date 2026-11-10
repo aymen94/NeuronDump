@@ -2,7 +2,9 @@
 
 The graph page draws the model with **wamr3d**, a Rust/WebAssembly 3D engine with a three.js-style
 API. NeuronDump uses its object API (`wamr3d/compat`: scene, camera, instanced meshes, line
-segments, raycaster) and its `OrbitControls` addon. Everything runs in the browser; the server only
+segments, raycaster) and its camera add-ons: `OrbitControls`, `MapControls` and `TrackballControls`
+(the last one written for NeuronDump in `vendor/wamr3d/addons/controls/`, kept by
+`scripts/vendor-wamr3d.sh` until wamr3d ships it). Everything runs in the browser; the server only
 sends the graph structure (`/api/models/{id}/graph`) and, for the embedding map, the PCA
 coordinates.
 
@@ -27,8 +29,10 @@ backend is shown next to the toggle (`WebGPU`, `WebGPU (software)` or `WebGL 2`)
 `renderer.backend.name`. If neither API exists, the canvas shows a message saying so instead of the
 graph.
 
-To test the fallback, add `backend=webgl` to the page's query (`#/model/<id>/graph?backend=webgl`;
-`backend=webgpu` forces WebGPU), or use a browser without WebGPU.
+The **renderer** menu next to the badge picks **Auto**, **WebGPU** or **WebGL 2**: changing it rebuilds
+both 3D views on that API, and the choice is remembered (`nd-backend` in the browser's storage). A
+forced API the browser lacks shows an error in the canvas; switch back to Auto. `backend=webgl` or
+`backend=webgpu` in the page's query (`#/model/<id>/graph?backend=webgl`) sets the starting choice.
 
 !!! note "WebGPU needs a secure context"
     Browsers only expose WebGPU on HTTPS pages and on `localhost` / `127.0.0.1`. The default
@@ -87,6 +91,28 @@ same picture):
 | search | Enter: highlights matches and flies to them; a hidden tensor expands its parents |
 | fly-to | **Focus** in the side panel animates the camera to the node |
 | edits | **Edit:** buttons in the side panel (zero, ×0.5, ×2, scale, skip layer) |
+
+## Controls panel
+
+The 2D, tower, city and force views have a **Controls** panel at the top right of the canvas (✕ hides
+it; its settings are remembered).
+
+| Part | |
+|---|---|
+| Orbit / Map / Trackball | how the mouse moves the camera. **Orbit**: left drag orbits, the vertical stays up. **Map**: left drag slides over the model, right drag orbits. **Trackball**: free rotation over the top and under the bottom. 2D always pans. |
+| pads | press and hold: orbit / tilt, pan, zoom; **Fit** |
+| presets | Front, Top, Side, Iso (keep the zoom), Reset (the layout's default camera) |
+| Camera | auto-rotate and its speed, wheel zooms toward the cursor, orbit / pan / zoom speed, inertia, field of view |
+| Saved views | name and **Save** the camera; click a saved view to go back to it (kept per model). **Copy link** puts the view in the URL (`view=` layout and `cam=` target, position, up) and copies it; the session token is not included. |
+| Layout | **size by** parameters / bytes / importance (taller buildings in the city, smaller boxes elsewhere); **explode** spreads the nodes apart; **slice** along x, y or z hides everything beyond the plane; **isolate the selection** shows only the clicked node and its neighbours up to N hops (dataflow edges and containment) |
+| Display | labels and their maximum count, connections and their strength, container outlines, minimap |
+
+**Keyboard** (click the canvas first): WASD or the arrows pan, Q / E orbit, R / F tilt, + / − zoom,
+Space or 0 fits.
+
+The **minimap** (bottom left) shows the whole layout from above (front in 2D): visible nodes in their
+colors, hidden ones faint, the slice plane in red, and the camera with its line of sight (in 2D the
+visible area). Click or drag on it to move the camera there.
 
 ## Token flow animation
 

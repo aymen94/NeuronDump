@@ -35,6 +35,7 @@ mod simulate;
 mod journey;
 mod generate;
 mod sweep;
+mod probes;
 use spec::*;
 use weights::*;
 pub use model::*;

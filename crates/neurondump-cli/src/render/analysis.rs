@@ -229,5 +229,3 @@ pub fn jobs(jobs: &[JobInfo]) -> String {
     }
     t.to_string()
 }
-
-// --- graph / ablation -------------------------------------------------------------------

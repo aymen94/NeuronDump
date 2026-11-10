@@ -32,6 +32,7 @@ Open that link. The token is new at every start, and the page doesn't work witho
 | model › **tokens** | tokenization, the templated prompt, per-token embedding info, the 3D embedding map ([below](#tokens)) |
 | model › **journey** | one token through the layers: logit lens, attention, FFN, decision breakdown ([below](#journey)) |
 | model › **timeline** | generation step by step, with probabilities, entropy, alternatives ([below](#timeline)) |
+| model › **probes** | causal tracing, head roles, layer similarity, weight spectrum, neuron explorer, glitch tokens, memory ([below](#probes)) |
 | model › **edits** | the full edit page: stack, new edit, snapshots, compare, bake ([below](#edits)) |
 | model › **template** | the chat template as a collapsible tree |
 | model › **stats** | statistics and histogram for one tensor, or the whole model as a job |
@@ -39,7 +40,8 @@ Open that link. The token is new at every start, and the page doesn't work witho
 | model › **trace** | run a prompt and see each layer's prediction |
 
 The **Edits** button in the header opens the edit panel as a drawer on **every model page**. It
-shows the number of active edits and turns orange when the model is edited.
+shows the number of active edits and turns orange when the model is edited. On the right of the
+header, **Repo** opens the project on GitHub.
 
 journey, timeline, compare (and trace, simulate, sweep) need a build with `--features trace` and a
 [supported architecture](limitations.md); other models show the reason and keep the static pages.
@@ -48,13 +50,20 @@ journey, timeline, compare (and trace, simulate, sweep) need a build with `--fea
 
 ![Graph page, 3D city view with a layer selected](images/model_graph.png)
 
-- **2D / 3D** toggle; in 3D a layout menu: **dataflow** (default), tower, city, force. The badge
-  next to it shows the renderer backend: `WebGPU`, `WebGPU (software)` or `WebGL 2`. See
+- **2D / 3D** toggle; in 3D a layout menu: **dataflow** (default), tower, city, force. The
+  **renderer** menu picks **Auto** (WebGPU, else WebGL 2), **WebGPU** or **WebGL 2**; the badge next
+  to it shows the one in use (`WebGPU`, `WebGPU (software)` or `WebGL 2`). See
   [3D graph](3d-graph.md).
+- **Controls** panel (2D, tower, city, force; top right of the canvas): Orbit / Map / Trackball
+  navigation, press-and-hold orbit, pan and zoom buttons, view presets, auto-rotate, speeds,
+  **saved views** and **Copy link**, layout tools (**size by**, **explode**, **slice**, **isolate
+  the selection**) and display options. A **minimap** (bottom left) shows the whole model and the
+  camera; click it to move there. See [3D graph](3d-graph.md#controls-panel).
 - **level** (section, layer, block, tensor), **group by** (section, layer, block, quant, kind,
   importance), **color by** (removable, section, kind, quant, importance, damage, flow, diff).
   **diff** uses the last run of the **Diff** page with this model as A: relative L2, scaled within
   each level (pale = unchanged, red = most changed); the side panel shows the node's numbers.
+  **role** and **rank** use the last head roles and weight spectrum from the [Probes](#probes) page.
 - **Click** a node for the side panel (path, size, removable flag, importance, stats, activation,
   contents, connections). **Double-click** (or **Expand**) opens it: layer → blocks → KV groups →
   heads; FFN → neuron buckets; MoE → experts. **Focus** flies the camera to it.
@@ -122,6 +131,9 @@ Pick a prompt and a token index (`-1` = last; click any chip to switch) and pres
   and top neurons (each with a **zero** button that adds an edit). `attributed` is computed in exact f32 from the recorded activations; the model's own logits come from quantized matmuls (candle also quantizes the activations to 8 bits), so on quantized models the two can differ by a few tenths of a logit, which matters when the chosen token and the runner-up are close.
 - **Show path in the graph** highlights the contributing layers, blocks, heads and buckets in the
   2D and 3D graph and sets the token for **token flow**.
+- **Compare with another prompt** follows the same token index in a second prompt and shows both
+  side by side: the logit lens per layer (differences in red), where it first diverges, P(target)
+  and the push of each layer for each decision.
 - Runs with the current edits; tick **baseline** to ignore them. MoE routing and SSM state are not
   measured (no forward pass for those architectures).
 
@@ -211,6 +223,24 @@ of layer 0 stand out: `blk.0.attn_k.bias` goes from −180 to 188.
 **Compare**: qwen3.8:27b next to qwen3:8b.
 
 ![Compare page](images/compare.png)
+
+## Probes
+
+One page for the [probes](probes.md), each a section with its own form, result and progress:
+
+- **Memory per context length** (loads at once): weights + KV cache for f16 / q8_0 / q4_0 caches.
+- **Causal tracing**: clean and corrupted prompt, optional target, restore residual / attn / ffn; a
+  layers × tokens heatmap and the strongest cells (with a link into the graph).
+- **Attention head roles**: a layers × heads grid colored by role (hover for the scores), the
+  specific heads with a **zero** button, **Color the graph by head role**.
+- **Layer similarity**: a corpus, the CKA matrix, per-layer change and **skip** buttons.
+- **Weight spectrum**: a layer filter, the sortable table, **Color the graph by stable rank**.
+- **Neuron explorer**: layer and neuron; reads, promotes, suppresses (the graph's neuron buckets link
+  here with **Explore neuron**).
+- **Glitch tokens**: candidates with norms, z-scores and reachability, and a **ban** button.
+
+The trace-based sections need a build with `--features trace` and a supported architecture; the
+others work on every model.
 
 ## Search and shortcuts
 

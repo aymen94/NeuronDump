@@ -36,6 +36,50 @@ pub(super) fn patch_rows(x: &Tensor, src: &[Vec<f32>], all: bool, cols: Option<(
 }
 
 /// xorshift64* for reproducible sampling.
+/// `x` with the given rows replaced.
+pub(super) fn set_rows(x: &Tensor, rows: &[(usize, Vec<f32>)]) -> Result<Tensor> {
+    let (n, d) = x.dims2()?;
+    let mut v = x.to_vec2::<f32>()?;
+    for (i, r) in rows {
+        if *i < n && r.len() == d {
+            v[*i].clone_from(r);
+        }
+    }
+    Ok(Tensor::from_vec(v.concat(), (n, d), x.device())?)
+}
+
+/// Mean attention patterns per head on [prefix, r, r] (r of length n): previous token,
+/// induction (the token after the earlier copy), duplicate (the earlier copy), sink (position 0), self.
+pub(super) fn head_pattern_scores(probs: &[Vec<Vec<f32>>], prefix: usize, n: usize) -> Vec<[f32; 5]> {
+    probs
+        .iter()
+        .map(|rows| {
+            let seq = rows.len();
+            let mut s = [0f32; 5];
+            let mut c = [0f32; 5];
+            for q in 1..seq {
+                s[0] += rows[q][q - 1];
+                s[3] += rows[q][0];
+                s[4] += rows[q][q];
+                c[0] += 1.0;
+                c[3] += 1.0;
+                c[4] += 1.0;
+                if n >= 2 && q >= prefix + n && q < prefix + 2 * n {
+                    s[1] += rows[q][q + 1 - n];
+                    s[2] += rows[q][q - n];
+                    c[1] += 1.0;
+                    c[2] += 1.0;
+                }
+            }
+            let mut out = [0f32; 5];
+            for i in 0..5 {
+                out[i] = if c[i] > 0.0 { s[i] / c[i] } else { 0.0 };
+            }
+            out
+        })
+        .collect()
+}
+
 pub(super) fn next_rand(state: &mut u64) -> f64 {
     *state ^= *state >> 12;
     *state ^= *state << 25;

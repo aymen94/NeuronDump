@@ -18,6 +18,7 @@ nav:
       - Graph and ablation: graph-and-ablation.md
       - 3D graph: 3d-graph.md
       - Interventions and edits: interventions.md
+      - Probes: probes.md
       - Web interface: web-ui.md
   - Reference:
       - CLI reference: cli.md

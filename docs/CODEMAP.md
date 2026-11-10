@@ -83,6 +83,10 @@ in the browser demo with the same web frontend.
 - `trace/intervention.rs` — ablation masks, steering, patching, sampling.
 - `trace/journey.rs` — journey and generation types, decision breakdown.
 - `trace/simulate.rs` — simulation and sweep types.
+- `trace/probes.rs` — causal tracing, head roles and layer similarity types; linear CKA.
+- `probe/mod.rs` — static probes: row streaming helpers; `probe/spectrum.rs` — stable rank, outliers;
+  `probe/neuron.rs` — neuron reads / writes; `probe/glitch.rs` — under-trained tokens;
+  `probe/memory.rs` — KV cache estimate.
 - `analyze/mod.rs` — prune plan, candidates, options (native).
 - `analyze/find.rs` — `analyze`: find removable parts (one large function).
 - `slim/mod.rs` — slim options / report, file-name checks.
@@ -122,6 +126,7 @@ in the browser demo with the same web frontend.
 - `math.rs` — sampling, softmax / KL / entropy, cosine, corpus metrics.
 - `backend.rs` — `CandleBackend` (`TraceBackend` impl, trace).
 - `simulate.rs` / `journey.rs` / `generate.rs` / `sweep.rs` — one backend operation each.
+- `probes.rs` — causal tracing, head roles, layer similarity.
 
 ## neurondump-cli
 
@@ -131,7 +136,7 @@ in the browser demo with the same web frontend.
 - `dispatch.rs` — `run_command`: one match over subcommands.
 - `context.rs` — `Ctx`, JSON output, inspect helpers.
 - `progress.rs` — progress bar.
-- `render/mod.rs` — table helpers; `render/{model,analysis,graph,tokens,edits,diff}.rs` — text output per area.
+- `render/mod.rs` — table helpers; `render/{model,analysis,graph,tokens,edits,diff,probes}.rs` — text output per area.
 - `repl/mod.rs` — REPL loop (one large function).
 - `repl/helper.rs` — command table, completion; `repl/util.rs` — args, paging; `repl/jobs.rs` — background jobs.
 
@@ -148,11 +153,15 @@ in the browser demo with the same web frontend.
 - `frontend/views/{model,analysis,global}.js` — model pages, analysis pages, compare / jobs / search.
 - `frontend/graph.js` — graph page (one closure: controls, colors, cuts, sweeps).
 - `frontend/graph3d.js` + `graph3d-layout.js` — 2D / tower / city / force renderer and layouts.
+- `frontend/graph3d-controls.js` — the Controls panel (navigation, saved views, layout tools, keyboard);
+  `frontend/graph3d-minimap.js` — the minimap.
+- `frontend/probes.js` — Probes page.
 - `frontend/flow3d.js` + `flow3d-layout.js` — 3D dataflow renderer and layout.
 - `frontend/wamr.js` — wamr3d boot; `frontend/embedmap.js` — 3D embedding map.
 - `frontend/inspector.js` — tokens page; `frontend/journey.js` — journey and timeline pages.
 - `frontend/edits.js` — edits page and drawer; `frontend/diff.js` — diff page.
-- `frontend/vendor/` — vendored wamr3d (do not edit).
+- `frontend/vendor/` — vendored wamr3d (do not edit, except `addons/controls/TrackballControls.js`,
+  maintained here until wamr3d ships it).
 
 ## neurondump-wasm, neurondump
 

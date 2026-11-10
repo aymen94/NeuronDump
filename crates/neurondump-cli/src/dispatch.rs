@@ -365,6 +365,67 @@ pub fn run_command(ctx: &Ctx, cmd: &Cmd) -> Result<String> {
                 Ok(render::tokens(&r))
             }
         }
+        Cmd::Causal { model, prompt, corrupt, target, component, max_tokens, edits } => {
+            let e = load_edits(edits.as_ref())?;
+            if !matches!(component.as_str(), "residual" | "attn" | "ffn") {
+                bail!("--component is residual, attn or ffn");
+            }
+            let params = json!({
+                "prompt": prompt.prompt, "chat": prompt.chat || prompt.system.is_some(), "system": prompt.system,
+                "corrupt": corrupt, "target": target, "component": component, "max_tokens": max_tokens, "edits": e.unwrap_or_default(),
+            });
+            let v = ctx.run_job(JobKind::Causal, model, params)?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::causal(&serde_json::from_value(v)?))
+        }
+        Cmd::Heads { model, samples, length, seed } => {
+            let v = ctx.run_job(JobKind::Heads, model, json!({ "samples": samples, "length": length, "seed": seed, "edits": [] }))?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::head_roles(&serde_json::from_value(v)?))
+        }
+        Cmd::Similarity { model, corpus, max_tokens, max_positions } => {
+            let texts = neurondump_core::trace::read_corpus(corpus)?;
+            let params = json!({ "corpus": texts, "max_tokens": max_tokens, "max_positions": max_positions, "edits": [] });
+            let v = ctx.run_job(JobKind::Similarity, model, params)?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::similarity(&serde_json::from_value(v)?))
+        }
+        Cmd::Spectrum { model, layers, embeddings, iters, limit } => {
+            let layers = layers.as_deref().map(parse_layer_list).transpose()?;
+            let v = ctx.run_job(JobKind::Spectrum, model, json!({ "layers": layers, "embeddings": embeddings, "iters": iters }))?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::spectrum(&serde_json::from_value(v)?, *limit))
+        }
+        Cmd::Neuron { model, layer, neuron, top_k } => {
+            let v = ctx.run_job(JobKind::Neuron, model, json!({ "layer": layer, "neuron": neuron, "top_k": top_k }))?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::neuron(&serde_json::from_value(v)?))
+        }
+        Cmd::Glitch { model, top, z } => {
+            let v = ctx.run_job(JobKind::Glitch, model, json!({ "top": top, "z": z }))?;
+            if json {
+                return to_json(&v);
+            }
+            Ok(render::glitch(&serde_json::from_value(v)?, *top))
+        }
+        Cmd::Memory { model, ctx: extra } => {
+            let m = app.open(model)?;
+            let r = neurondump_core::probe::memory_estimate(&m, extra)?;
+            if json {
+                return to_json(&r);
+            }
+            Ok(render::memory(&r))
+        }
         Cmd::Journey { model, prompt, token, edits, top_k } => {
             let e = load_edits(edits.as_ref())?;
             let params = json!({
@@ -425,4 +486,22 @@ pub fn run_command(ctx: &Ctx, cmd: &Cmd) -> Result<String> {
             Ok(out)
         }
     }
+}
+
+/// `0,3,10-12` -> [0, 3, 10, 11, 12].
+fn parse_layer_list(s: &str) -> Result<Vec<u32>> {
+    let mut out = Vec::new();
+    for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.split_once('-') {
+            Some((a, b)) => {
+                let (a, b): (u32, u32) = (a.trim().parse()?, b.trim().parse()?);
+                if b < a || b - a > 4096 {
+                    bail!("bad layer range {part:?}");
+                }
+                out.extend(a..=b);
+            }
+            None => out.push(part.parse()?),
+        }
+    }
+    Ok(out)
 }

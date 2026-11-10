@@ -233,4 +233,3 @@ pub fn sweep(r: &neurondump_core::trace::SweepReport) -> String {
     s
 }
 
-// --- token inspector / edits -------------------------------------------------------------

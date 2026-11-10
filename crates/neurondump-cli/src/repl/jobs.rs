@@ -82,6 +82,12 @@ pub(super) fn show_job(ctx: &Ctx, id: &str) -> Result<String> {
         }
         JobKind::Bake => render::bake(&serde_json::from_value(v)?),
         JobKind::Diff => render::diff(&serde_json::from_value(v)?, 20),
+        JobKind::Causal => render::causal(&serde_json::from_value(v)?),
+        JobKind::Heads => render::head_roles(&serde_json::from_value(v)?),
+        JobKind::Similarity => render::similarity(&serde_json::from_value(v)?),
+        JobKind::Spectrum => render::spectrum(&serde_json::from_value(v)?, 40),
+        JobKind::Neuron => render::neuron(&serde_json::from_value(v)?),
+        JobKind::Glitch => render::glitch(&serde_json::from_value(v)?, 50),
         JobKind::Inspect => {
             let stats: Value = v["stats"].clone();
             if stats.is_null() {

@@ -27,6 +27,7 @@ Models are referred to by **id**, never by path. Errors are `{"error": "…"}` w
 | GET | `/api/models/{id}/tensors?layer=&role=&q=&sort=&offset=&limit=` | `{"total","tensors":[…]}` |
 | GET | `/api/models/{id}/layers` | per-layer kinds |
 | GET | `/api/models/{id}/template` | template decision trees |
+| GET | `/api/models/{id}/memory?ctx=65536,200000` | weights + KV cache per context length (`kv_types`, `rows[].kv_bytes`, `rows[].total_bytes`, `notes`) |
 | GET | `/api/models/{id}/tensors/{name}/stats` | statistics of one tensor |
 | GET | `/api/search?q=&model=&limit=` | models, plus tokens / tensors / metadata of `model` |
 | GET | `/api/compare?models=a,b` | comparison report |
@@ -146,7 +147,7 @@ curl -s -H "$H" -X DELETE $U/models/$M/edits
 | GET | `/api/jobs/{id}/result` | the result JSON (409 while running) |
 
 Kinds: `inspect`, `stats`, `analyze`, `slim`, `trace`, `ablate`, `sweep`, `journey`, `generate`,
-`compare`, `bake`, `diff` (`model` is A; `params`: `{ "other": "<id of B>", "top": N, "metadata_only": false }`). The API never accepts server file paths: corpus files are stripped (send texts),
+`compare`, `bake`, `causal`, `heads`, `similarity`, `spectrum`, `neuron`, `glitch`, `diff` (`model` is A; `params`: `{ "other": "<id of B>", "top": N, "metadata_only": false }`). The API never accepts server file paths: corpus files are stripped (send texts),
 `slim` / `bake` outputs must be plain file names.
 
 `journey`, `generate` and `compare` use the model's **current edit stack** unless `params.edits` is
@@ -206,6 +207,19 @@ Result: `{"edits":[…], "compiled":{…}, "simulation": SimReport}`. Each `simu
 
 `{"out": "name.gguf"}` (plus optional `edits`). Result: `output`, `modelfile`, `original_size`,
 `new_size`, `applied`, `skipped` (with reasons), `tensors_changed`, `requantized`, `notes`, `validation`.
+
+### Probes
+
+| Kind | `params` |
+|---|---|
+| `causal` | `{"prompt":"<clean>","corrupt":"<corrupted>","chat":false,"target":" Paris","component":"residual"\|"attn"\|"ffn","max_tokens":64}` → `effect[layer][position]`, `probs`, `peaks`, `clean_prob`, `corrupt_prob` |
+| `heads` | `{"samples":4,"length":24,"seed":7}` → `heads[]` (`layer`, `head`, `induction`, `prev_token`, `duplicate`, `sink`, `self_attn`, `role`), `counts` |
+| `similarity` | `{"corpus":["…"],"max_tokens":64,"max_positions":256}` → `labels`, `cka` matrix, `layers[]`, `redundant` |
+| `spectrum` | `{"layers":[0,1],"embeddings":false,"iters":12}` → `tensors[]` (`sigma_max`, `stable_rank`, `rank_ratio`, `outlier_ratio`, `kurtosis`), `lowest_rank`, `most_outliers` |
+| `neuron` | `{"layer":20,"neuron":4058,"top_k":15}` → `reads`, `promotes`, `suppresses` |
+| `glitch` | `{"top":100,"z":-3}` → `embed` / `unembed` norm stats, `flagged`, `candidates[]` |
+
+`causal`, `heads` and `similarity` use the current edit stack like `journey`.
 
 ### Older kinds
 

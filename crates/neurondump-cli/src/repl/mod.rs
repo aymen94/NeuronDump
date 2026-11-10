@@ -449,7 +449,8 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                             let Some(id) = args.first() else { bail!("node <id>") };
                             argv.extend(["node".into(), need_model()?, id.clone()]);
                         }
-                        "tensors" | "layers" | "template" | "stats" | "analyze" | "slim" | "export" | "graph" | "sweep" => {
+                        "tensors" | "layers" | "template" | "stats" | "analyze" | "slim" | "export" | "graph" | "sweep" | "causal" | "heads" | "similarity"
+                        | "spectrum" | "neuron" | "glitch" | "memory" => {
                             argv.extend([cmd.clone(), need_model()?]);
                             argv.extend(args.clone());
                         }

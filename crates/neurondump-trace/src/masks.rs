@@ -27,6 +27,14 @@ pub(super) struct Masks {
     pub(super) patch_h: HashMap<usize, (Vec<Vec<f32>>, bool)>,
     /// (head, source attention output rows before the projection, all positions).
     pub(super) patch_z: HashMap<usize, Vec<(usize, Vec<Vec<f32>>, bool)>>,
+    /// (position, row) set after the layer in the residual stream / in what the attention or
+    /// FFN block adds (causal tracing restores clean states this way).
+    pub(super) restore_h: HashMap<usize, Vec<(usize, Vec<f32>)>>,
+    pub(super) restore_attn: HashMap<usize, Vec<(usize, Vec<f32>)>>,
+    pub(super) restore_ffn: HashMap<usize, Vec<(usize, Vec<f32>)>>,
+    /// Resume a pass at this layer from this residual stream (the earlier layers are known to
+    /// give it): causal tracing reuses the corrupted run this way. Measurements are off then.
+    pub(super) start: Option<(usize, Tensor)>,
 }
 
 impl Masks {

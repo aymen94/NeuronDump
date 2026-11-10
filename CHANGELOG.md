@@ -2,8 +2,35 @@
 
 Features by development phase.
 
-## Unreleased
+## 0.1.5
 
+- **Probes** ([docs/probes.md](docs/probes.md)), each a CLI command, a job and a section of the new
+  web **Probes** page:
+  - `causal`: causal tracing. Restores clean states (residual, attention or FFN) inside a
+    corrupted run, layer × token, to show where a fact is held. Passes resume at the restored
+    layer, about 2× faster than full passes.
+  - `heads`: attention head roles (induction, previous-token, duplicate-token, self, sink) from
+    repeated random tokens, with graph **color by role**.
+  - `similarity`: linear CKA between the residual stream after every layer on a corpus, plus the
+    most redundant layers (with skip buttons).
+  - `spectrum`: largest singular value, stable rank, outlier ratio and kurtosis of every weight
+    matrix, with graph **color by rank**.
+  - `neuron`: what one FFN neuron reads (embeddings) and writes (unembedding) in token space.
+  - `glitch`: under-trained token candidates (abnormally small embedding / output rows) with a
+    reachability check.
+  - `memory`: weights + KV cache per context length for f16 / q8_0 / q4_0 caches
+    (`GET /api/models/{id}/memory`).
+- **Journey:** compare two prompts side by side (logit lens per layer, where they diverge, push per layer).
+- **3D graph controls:** a panel over the canvas with press-and-hold orbit / pan / zoom, view
+  presets, auto-rotate, speed / inertia / field-of-view sliders, keyboard navigation (WASD / arrows,
+  Q/E, R/F, +/−, Space). Three navigation modes: Orbit, Map, and Trackball (free rotation; a new
+  `TrackballControls` add-on for wamr3d). Saved camera views per model and **Copy link** (`cam=` in
+  the URL). Minimap with the camera and click-to-move. Layout tools: size by parameters / bytes /
+  importance, explode, slice plane along x / y / z, isolate the selection with N hops of neighbours.
+  Display: labels and label count, connections and their strength, container outlines.
+- **Renderer choice:** a **renderer** menu on the graph page (Auto / WebGPU / WebGL 2) rebuilds both
+  3D views on the chosen API and is remembered.
+- **Header:** a GitHub **Repo** link to the project.
 - **Gemma 4 tokenization:** `tokenizer.ggml.model = gemma4` is now encoded with llama.cpp's
   SPM-style BPE rules (spaces escaped to `▁`, merges over raw UTF-8, newline-only pre-split), so
   `tokens`, the token inspector and the embedding map work on Gemma 4 files. Ids verified against

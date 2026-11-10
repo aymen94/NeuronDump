@@ -269,6 +269,89 @@ pub enum Cmd {
         #[arg(long, default_value_t = 5)]
         neighbors: usize,
     },
+    /// Causal tracing: restore clean states in a corrupted run, layer by layer and token by token (feature `trace`).
+    Causal {
+        model: String,
+        /// The clean prompt.
+        #[command(flatten)]
+        prompt: PromptArgs,
+        /// The corrupted prompt (e.g. another subject).
+        #[arg(long)]
+        corrupt: String,
+        /// Token text whose probability is measured (default: the clean prediction).
+        #[arg(long)]
+        target: Option<String>,
+        /// residual, attn or ffn.
+        #[arg(long, default_value = "residual")]
+        component: String,
+        #[arg(long)]
+        max_tokens: Option<usize>,
+        /// Apply these edits (edits.json); default: none.
+        #[arg(long)]
+        edits: Option<PathBuf>,
+    },
+    /// Attention head roles (induction, previous-token, duplicate, sink) from repeated random tokens (feature `trace`).
+    Heads {
+        model: String,
+        #[arg(long, default_value_t = 4)]
+        samples: usize,
+        /// Length of the random part (the sequence repeats it once).
+        #[arg(long, default_value_t = 24)]
+        length: usize,
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+    },
+    /// Layer-to-layer similarity (linear CKA) on a corpus, and the most redundant layers (feature `trace`).
+    Similarity {
+        model: String,
+        /// Texts separated by blank lines.
+        #[arg(long)]
+        corpus: PathBuf,
+        #[arg(long)]
+        max_tokens: Option<usize>,
+        /// Token positions used in total (default 256).
+        #[arg(long)]
+        max_positions: Option<usize>,
+    },
+    /// Spectrum of every weight matrix: largest singular value, stable rank, outliers.
+    Spectrum {
+        model: String,
+        /// Only these layers, e.g. `0,3,10-12`.
+        #[arg(long)]
+        layers: Option<String>,
+        /// Also token_embd / output (large).
+        #[arg(long)]
+        embeddings: bool,
+        #[arg(long, default_value_t = 12)]
+        iters: usize,
+        /// Rows shown.
+        #[arg(long, default_value_t = 40)]
+        limit: usize,
+    },
+    /// What one FFN neuron reads and writes in token space (from the weights).
+    Neuron {
+        model: String,
+        layer: u32,
+        neuron: u32,
+        #[arg(long, default_value_t = 15)]
+        top_k: usize,
+    },
+    /// Under-trained ("glitch") token candidates: abnormally small embedding / output rows.
+    Glitch {
+        model: String,
+        #[arg(long, default_value_t = 50)]
+        top: usize,
+        /// z-score threshold.
+        #[arg(long, default_value_t = -3.0, allow_hyphen_values = true)]
+        z: f32,
+    },
+    /// Memory needed per context length: weights plus KV cache (f16, q8_0, q4_0).
+    Memory {
+        model: String,
+        /// Extra context lengths to show.
+        #[arg(long, value_delimiter = ',')]
+        ctx: Vec<u64>,
+    },
     /// Follow one token through the layers: logit lens, attention, FFN, decision breakdown (feature `trace`).
     Journey {
         model: String,

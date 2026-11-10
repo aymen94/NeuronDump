@@ -40,6 +40,10 @@ pub(super) struct FwdOpt {
     pub(super) record: Option<usize>,
     /// Keep every layer's residual rows and attention outputs (steering / patching sources).
     pub(super) keep: bool,
+    /// Keep what every attention and FFN block adds, at every position.
+    pub(super) keep_blocks: bool,
+    /// Score attention patterns on a repeated sequence: (prefix length, repeated length).
+    pub(super) head_probe: Option<(usize, usize)>,
 }
 
 /// One layer at the recorded position.
@@ -83,6 +87,13 @@ pub(super) struct FwdOut {
     /// With `keep`: residual rows after every layer, and attention outputs before the projection.
     pub(super) hidden: Vec<Vec<Vec<f32>>>,
     pub(super) zs: Vec<Vec<Vec<f32>>>,
+    /// With `keep`: the residual stream before layer 0.
+    pub(super) input: Vec<Vec<f32>>,
+    /// With `keep_blocks`: per layer, what attention / FFN added at every position (empty when off).
+    pub(super) attn_rows: Vec<Vec<Vec<f32>>>,
+    pub(super) ffn_rows: Vec<Vec<Vec<f32>>>,
+    /// With `head_probe`: per layer, per head [prev, induction, duplicate, sink, self].
+    pub(super) head_scores: Vec<Vec<[f32; 5]>>,
 }
 
 impl<'a> Model<'a> {

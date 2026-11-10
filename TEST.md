@@ -250,3 +250,42 @@ nd graph llama3.2:1b --level block --format dot --out /tmp/llama.dot && dot -Tsv
 
 **Expected:** every JSON output has `"schema_version": 1`; the CSV quotes fields with commas or quotes;
 `compare` qwen3 vs qwen3-embedding vocab overlap ≈ 0.998; DOT renders with green / amber / red nodes.
+
+## 14. Probes
+
+```sh
+nd causal qwen2.5:0.5b --prompt "The Eiffel Tower is located in the city of" --corrupt "The Colosseum is located in the city of"
+nd heads qwen2.5:0.5b --samples 2
+nd similarity qwen2.5:0.5b --corpus /tmp/corpus.txt
+nd spectrum qwen2.5:0.5b --limit 8
+nd neuron qwen2.5:0.5b 20 4058
+nd glitch llama3.1:8b --top 15
+nd memory llama3.1:8b --ctx 65536
+```
+
+**Expected:** causal: target `" Paris"`, clean ≈ 0.45, corrupted ≈ 0; dark cells on the subject's last
+token in layers 1–19, then on the last token from layer 20 (≈ 1.5–2 min on CPU). heads: induction heads
+around layers 9–16 with scores > 0.9. similarity: a 25 × 25 matrix and a CKA in→out column, layer 0
+lowest. spectrum: 168 matrices in a few seconds, `blk.0.attn_q.weight` first (stable rank ≈ 2.9).
+glitch on llama3.1:8b: byte tokens `<0xC0>`, `<0xC1>`, `<0xF5>`…`<0xFF>` with zero norms, not
+reachable. memory: 16.00 GiB of f16 KV cache at 131072.
+
+Web, on the **probes** page: each section runs with a progress line and a cancel button; **Color the
+graph by head role** / **by stable rank** open the graph with those colors and a legend; **skip** /
+**zero** / **ban** add edits (the Edits badge counts them). Journey: **Compare side by side** with a
+second prompt shows two lens columns, differences in red.
+
+## 15. 3D graph controls
+
+Graph page, 3D tower / city / force and 2D.
+
+- **renderer** menu: WebGL 2 then Auto; the badge follows and the view is rebuilt each time.
+- **Controls** panel: hold the pad buttons (continuous motion); Front / Top / Side / Iso; Orbit / Map /
+  Trackball (Trackball turns over the top); keyboard WASD / Q E / R F / + − / Space after clicking the
+  canvas.
+- **Saved views**: save two views, reload the page, click them; **Copy link**, open the link in a new
+  tab (with the token): same camera.
+- **Layout**: size by parameters (city buildings change height), explode 2×, slice along y at 50% (top
+  half hidden, red line on the minimap for x / z), isolate the selection with 1 hop (click layer 7:
+  only layers 6–8 remain).
+- **Minimap**: click a corner, the camera moves there.

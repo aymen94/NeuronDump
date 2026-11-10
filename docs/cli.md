@@ -196,6 +196,20 @@ neurondump edit llama3.2:1b --apply edits.json --prompt "The name of the star th
 neurondump edit llama3.2:1b --apply edits.json --bake llama-edited.gguf --no-compare
 ```
 
+### Probes
+
+See [Probes](probes.md) for what each one measures. `--json` prints the full result.
+
+| Command | |
+|---|---|
+| `causal <model> --prompt "<clean>" --corrupt "<corrupted>"` | causal tracing; `--target <text>`, `--component residual\|attn\|ffn`, `--chat`, `--system`, `--max-tokens N`, `--edits <file>` (trace) |
+| `heads <model>` | attention head roles; `--samples N` (4), `--length N` (24), `--seed N` (trace) |
+| `similarity <model> --corpus <file>` | layer CKA and redundant layers; `--max-tokens N`, `--max-positions N` (256) (trace) |
+| `spectrum <model>` | stable rank and outliers per matrix; `--layers 0,3,10-12`, `--embeddings`, `--iters N` (12), `--limit N` (40) |
+| `neuron <model> <layer> <index>` | what one FFN neuron reads and writes; `--top-k N` (15) |
+| `glitch <model>` | under-trained token candidates; `--top N` (50), `--z <threshold>` (−3) |
+| `memory <model>` | weights + KV cache per context length; `--ctx 65536,200000` adds lengths |
+
 ### `compare <model> <model> [...]`
 Side by side: sizes, layers, tokenizer, vocabulary overlap, differing metadata.
 
@@ -262,6 +276,7 @@ neurondump[llama3.2:1b]> use qwen2.5-coder:7b
 | `simulate [prompt] [--tokens N] [--corpus f]` | run the selection in memory (`&` for background) |
 | `sweep --corpus f [--level head --layer N]` | rank layers or heads by damage (`&` for background) |
 | `plan save <file>` | write the selection as a prune plan |
+| `causal`, `heads`, `similarity`, `spectrum`, `neuron <layer> <index>`, `glitch`, `memory` | the [probes](probes.md) for the current model, same flags as above |
 | `tokens <text> [--chat]` | tokenization of the current model (the text is remembered) |
 | `journey <idx> [prompt] [--chat] [--baseline]` | follow token `idx` (negative from the end) through the layers, with the current edits |
 | `generate [prompt] [--steps N] [--explain] [--temperature t] [--top-k k] [--top-p p] [--seed s]` | generation timeline |

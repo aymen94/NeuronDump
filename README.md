@@ -134,6 +134,10 @@ Tower, city and force layouts are there too. Everything is bundled, so it works 
   against the runner-up. The path lights up in the 2D and 3D graph, and **token flow** animates it.
 - **Generation timeline**: each step's token, probability, entropy and alternative; click a step
   for its decision breakdown.
+- **Probes**: causal tracing (where a fact is held, layer × token), attention head roles
+  (induction, previous-token, sink…), layer similarity (CKA, redundant layers), the weight spectrum
+  of every matrix (stable rank, outliers), a neuron explorer, under-trained ("glitch") tokens, and
+  the memory a context length needs. See [Probes](docs/probes.md).
 - **Live edits**: scale or zero a layer, block, head, neuron bucket, neuron or expert; skip a layer;
   edit a token's embedding; ban or boost tokens; activation patching; steering vectors; sampling,
   forced tokens, system prompt and template. Every change runs baseline vs edited (text, top-k, KL,
@@ -198,8 +202,9 @@ neurondump diff huihui_ai/qwen2.5-abliterate:0.5b qwen2.5:0.5b --top 10
 | [CLI reference](docs/cli.md) | every command and flag, and the REPL |
 | [Web interface](docs/web-ui.md) | every page: graph, tokens, journey, timeline, edits, jobs |
 | [HTTP API](docs/api.md) | every endpoint, with examples |
-| [3D graph](docs/3d-graph.md) | wamr3d, backend fallback, layout, performance |
+| [3D graph](docs/3d-graph.md) | wamr3d, renderer choice, navigation panel, layout tools, performance |
 | [Interventions](docs/interventions.md) | ablation, edits, steering, patching, undo / restore, bake |
+| [Probes](docs/probes.md) | causal tracing, head roles, layer similarity, weight spectrum, neurons, glitch tokens, memory |
 | [Limitations](docs/limitations.md) | unsupported architectures, experimental parts, WebGPU notes |
 | [Changelog](CHANGELOG.md) | features by phase |
 | [Analyze and slim](docs/analyze-and-slim.md) | making models smaller, safely |

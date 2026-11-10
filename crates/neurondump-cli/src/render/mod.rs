@@ -26,12 +26,14 @@ mod graph;
 mod tokens;
 mod edits;
 mod diff;
+mod probes;
 pub use model::*;
 pub use analysis::*;
 pub use graph::*;
 pub use tokens::*;
 pub use edits::*;
 pub use diff::*;
+pub use probes::*;
 
 fn table(headers: &[&str]) -> Table {
     let mut t = Table::new();

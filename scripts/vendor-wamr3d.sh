@@ -17,6 +17,13 @@ tar -xzf "$TMP"/wamr3d-"$VERSION".tgz -C "$TMP"
 SRC="$TMP/package"
 [ -f "$SRC/wamr3d_wasm_bg.wasm" ] || { echo "error: the package has no wamr3d_wasm_bg.wasm" >&2; exit 1; }
 
+# TrackballControls is maintained here until wamr3d ships it: keep the local copy if the
+# package has none.
+KEEP="$TMP/TrackballControls.js"
+if [ ! -f "$SRC/addons/controls/TrackballControls.js" ] && [ -f "$DEST/addons/controls/TrackballControls.js" ]; then
+  cp "$DEST/addons/controls/TrackballControls.js" "$KEEP"
+fi
+
 rm -rf "$DEST"
 mkdir -p "$DEST/addons/controls"
 # Runtime only: the JS entry points, the engine bindings and the .wasm. No typings.
@@ -28,6 +35,11 @@ for d in compat webgl webgpu; do
 done
 cp "$SRC/addons/controls/OrbitControls.js" "$DEST/addons/controls/"
 cp -R "$SRC/addons/controls/orbit" "$DEST/addons/controls/orbit"
+if [ -f "$SRC/addons/controls/TrackballControls.js" ]; then
+  cp "$SRC/addons/controls/TrackballControls.js" "$DEST/addons/controls/"
+elif [ -f "$KEEP" ]; then
+  cp "$KEEP" "$DEST/addons/controls/"
+fi
 find "$DEST" -name '*.d.ts' -delete
 
 cat > "$DEST/../README.txt" <<EOF

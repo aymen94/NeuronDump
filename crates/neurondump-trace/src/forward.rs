@@ -23,6 +23,14 @@ impl<'a> Model<'a> {
         if let Some(n) = &self.embd_norm {
             h = n.forward(&h)?;
         }
+        let start = masks.start.as_ref().map_or(0, |(s, _)| *s);
+        if let Some((_, h0)) = &masks.start {
+            h = h0.clone();
+        }
+        let input = if opt.keep { h.to_vec2::<f32>()? } else { vec![] };
+        let mut attn_rows = Vec::new();
+        let mut ffn_rows = Vec::new();
+        let mut head_scores = Vec::new();
         let rpos = opt.record.map(|r| r.min(seq - 1));
         let mut record = rpos.map(|pos| Record { pos, emb: Vec::new(), layers: Vec::new() });
         if let (Some(r), Some(pos)) = (record.as_mut(), rpos) {
@@ -53,6 +61,9 @@ impl<'a> Model<'a> {
             }
         };
         for (li, l) in self.layers.iter().enumerate() {
+            if li < start {
+                continue;
+            }
             check_cancel(p)?;
             if opt.measure {
                 p.set(50.0 + 45.0 * li as f32 / n_layers as f32, &format!("layer {li}"));
@@ -63,6 +74,13 @@ impl<'a> Model<'a> {
                 rec.skipped = true;
                 if opt.keep {
                     zs.push(vec![]);
+                }
+                if opt.keep_blocks {
+                    attn_rows.push(vec![]);
+                    ffn_rows.push(vec![]);
+                }
+                if opt.head_probe.is_some() {
+                    head_scores.push(vec![]);
                 }
                 if opt.measure {
                     let hv = h.to_vec2::<f32>()?;
@@ -117,6 +135,9 @@ impl<'a> Model<'a> {
                         scores = scores.broadcast_add(m)?;
                     }
                     let probs = softmax_last(&scores)?;
+                    if let Some((prefix, n)) = opt.head_probe {
+                        head_scores.push(head_pattern_scores(&probs.to_vec3::<f32>()?, prefix, n));
+                    }
                     if opt.measure {
                         // Mean attention entropy per head over query positions.
                         let pv = probs.to_vec3::<f32>()?;
@@ -167,12 +188,26 @@ impl<'a> Model<'a> {
                     if rec.attn_factor != 1.0 {
                         att = (att * rec.attn_factor as f64)?;
                     }
+                    if let Some(rs) = masks.restore_attn.get(&li) {
+                        att = set_rows(&att, rs)?;
+                    }
+                    if opt.keep_blocks {
+                        attn_rows.push(att.to_vec2::<f32>()?);
+                    }
                     if let Some(pos) = rpos {
                         rec.attn_out = row_of(&att, pos)?;
                     }
                     h = (h + att)?;
-                } else if opt.keep {
-                    zs.push(vec![]);
+                } else {
+                    if opt.keep {
+                        zs.push(vec![]);
+                    }
+                    if opt.keep_blocks {
+                        attn_rows.push(vec![]);
+                    }
+                    if opt.head_probe.is_some() {
+                        head_scores.push(vec![]);
+                    }
                 }
                 if let Some(n) = &l.attn_out_norm {
                     h = n.forward(&h)?;
@@ -229,10 +264,18 @@ impl<'a> Model<'a> {
                     if rec.ffn_factor != 1.0 {
                         ffn = (ffn * rec.ffn_factor as f64)?;
                     }
+                    if let Some(rs) = masks.restore_ffn.get(&li) {
+                        ffn = set_rows(&ffn, rs)?;
+                    }
+                    if opt.keep_blocks {
+                        ffn_rows.push(ffn.to_vec2::<f32>()?);
+                    }
                     if let Some(pos) = rpos {
                         rec.ffn_out = row_of(&ffn, pos)?;
                     }
                     h = (h + ffn)?;
+                } else if opt.keep_blocks {
+                    ffn_rows.push(vec![]);
                 }
                 if let Some(n) = &l.out_norm {
                     h = n.forward(&h)?;
@@ -259,6 +302,9 @@ impl<'a> Model<'a> {
             }
             if let Some((src, all)) = masks.patch_h.get(&li) {
                 h = patch_rows(&h, src, *all, None)?;
+            }
+            if let Some(rs) = masks.restore_h.get(&li) {
+                h = set_rows(&h, rs)?;
             }
             if opt.keep {
                 hidden.push(h.to_vec2::<f32>()?);
@@ -319,6 +365,10 @@ impl<'a> Model<'a> {
             record,
             hidden,
             zs,
+            input,
+            attn_rows,
+            ffn_rows,
+            head_scores,
         })
     }
 

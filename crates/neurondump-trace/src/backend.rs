@@ -110,4 +110,16 @@ impl TraceBackend for CandleBackend {
     fn sweep(&self, m: &ModelHandle, req: &SweepRequest, p: &dyn Progress) -> Result<SweepReport> {
         self.sweep_impl(m, req, p)
     }
+
+    fn causal(&self, m: &ModelHandle, req: &neurondump_core::trace::CausalRequest, p: &dyn Progress) -> Result<neurondump_core::trace::CausalReport> {
+        self.causal_impl(m, req, p)
+    }
+
+    fn head_roles(&self, m: &ModelHandle, req: &neurondump_core::trace::HeadRolesRequest, p: &dyn Progress) -> Result<neurondump_core::trace::HeadRolesReport> {
+        self.head_roles_impl(m, req, p)
+    }
+
+    fn similarity(&self, m: &ModelHandle, req: &neurondump_core::trace::SimilarityRequest, p: &dyn Progress) -> Result<neurondump_core::trace::SimilarityReport> {
+        self.similarity_impl(m, req, p)
+    }
 }
